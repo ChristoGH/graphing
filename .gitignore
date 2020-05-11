@@ -2,6 +2,7 @@ data/
 img/
 *.pdf
 *.png
+*.gephi
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
