@@ -16,6 +16,7 @@ sudo chown -R neo4j:adm movie.db/
 sudo find . -name "neo4j"
 ./var/lib/neo4j/import
 ./var/lib/neo4j/data/dbms/auth
+
 sudo rm -rf  ./var/lib/neo4j/data/dbms/auth
     ./usr/share/neo4j
     ./usr/share/neo4j/bin/neo4j

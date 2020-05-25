@@ -1,0 +1,7 @@
+java-1.8.0-openjdk-amd64
+sudo update-java-alternatives --jre --set java-1.8.0-openjdk-amd64
+
+wget -O - https://debian.neo4j.com/neotechnology.gpg.key | sudo apt-key add -
+echo 'deb https://debian.neo4j.com stable 3.5' | sudo tee -a /etc/apt/sources.list.d/neo4j.list
+sudo apt-get update
+
