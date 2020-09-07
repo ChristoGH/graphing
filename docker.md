@@ -18,4 +18,7 @@ sudo docker run -p 8888:8888 -p 6006:6006 -it -u user  -w /home/user -v my_data_
 # docker run --name=nginx -d -v ~/nginxlogs:/var/log/nginx -p 5000:80 nginx
 # sudo docker run -p 8888:8888 -p 6006:6006 --name=nginx -it -u user  -w /home/user -v /media/lnr-ai/christo/github_repos/graphing:/home/user/graphing tiagopeixoto/graph-tool bash
 sudo docker run -p 8888:8888 -p 6006:6006 -it -u user  -w /home/user -v /media/lnr-ai/christo/github_repos/graphing:/home/user/graphing tiagopeixoto/graph-tool bash
-http://127.0.0.1:8888/?token=1d3e27294c1299bde4c92a0f9eb800c6507fc1badb6de549
+jupyter notebook --ip 0.0.0.0
+http://127.0.0.1:8888/?token=cb54e891f134dfe5469ae87798186ec5258ae600b00cc90a
+
+sudo docker run -p 8889:8889 -p 6006:6006 -it -u user  -w /home/user -v /media/lnr-ai/christo/github_repos/graphing:/home/user/graphing tiagopeixoto/graph-tool bash

@@ -1,0 +1,7 @@
+{
+    "python.pythonPath": "/home/lnr-ai/anaconda3/envs/ae_mp/bin/python",
+    "files.associations": {
+        "*.mql4": "cpp",
+        "*.mq4": "cpp"
+    }
+}

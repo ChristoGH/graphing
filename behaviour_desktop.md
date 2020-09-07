@@ -1,8 +1,14 @@
-
+// CALL gds.graph.list()
+// YIELD graphName, nodeProjection, relationshipProjection, nodeQuery, relationshipQuery,
+//       nodeCount, relationshipCount, schema, degreeDistribution, creationTime, modificationTime;
 // sudo chown -R neo4j:neo4j /var/lib/neo4j/plugins
 // sudo mv /media/lnr-ai/christo/github_repos/graphing/data/clientswipes_202003_neo4j.csv /var/lib/neo4j/
+// sudo mv /media/lnr-ai/christo/github_repos/graphing/data/woolworths_benmore.csv /var/lib/neo4j/import/
+// sudo mv /var/lib/neo4j/clientswipes_202003.csv /var/lib/neo4j/import/
+// sudo mv /media/lnr-ai/christo/github_repos/graphing/data/clientswipes_202003.csv /var/lib/neo4j/import/
 // sudo cp /var/lib/neo4j/import/clientswipes_202003_neo4j.csv /home/lnr-ai/.config/Neo4j\ Desktop/Application/neo4jDatabases/database-c8878123-c937-4a52-9271-227eec393f53/installation-4.0.3/import/
 // clientswipes_202003_neo4j.csv"
+// sudo mv /media/lnr-ai/downloads/home/christo/data/clientswipes_202003_PBCVM.csv /var/lib/neo4j/import/
 
 // cd /home/lnr-ai/.config/Neo4j\ Desktop/Application/neo4jDatabases/database-c8878123-c937-4a52-9271-227eec393f53/installation-4.0.3/
 // <!-- check consistency: -->
@@ -19,20 +25,38 @@
 // dbms.directories.data=/usr/local/data
 
 // :SERVER change-password
-// /usr/bin/cypher-shell -u neo4j -p newPassword
+// ./cypher-shell -u neo4j -p newPassword
+./cypher-shell -u neo4j -p neo4j
 // journalctl -e -u neo4j
 
 // cd /usr/local/data
 // sudo chown -R neo4j:neo4j /var/lib/neo4j/plugins
 // sudo chown -R neo4j:neo4j /media/lnr-ai/neo4j/data
+// seg_l3_num = [312,313,321,322,323,324,325,333,336]
+
 ./cypher-shell -u neo4j -p newPassword
+
+// https://linuxize.com/post/how-to-add-swap-space-on-ubuntu-18-04/
+// https://www.tecmint.com/clear-ram-memory-cache-buffer-and-swap-space-on-linux/
+// CLEAR swap space: swapoff -a && swapon -a
 
 CREATE CONSTRAINT ON (c:Client) ASSERT c.dedupestatic IS UNIQUE;
 CREATE CONSTRAINT ON (m:Merchant) ASSERT m.franchisename IS UNIQUE;
 CREATE CONSTRAINT ON (s:Segment) ASSERT s.seg_l3_num IS UNIQUE;
+CREATE CONSTRAINT ON (c:Company) ASSERT c.companyname IS UNIQUE;
+
+MATCH (c:Client)
+WHERE NOT c.seg_l3_num IN [312,313,321,322,323,324,325,333,336]
+DETACH DELETE c;
+
+CALL apoc.periodic.iterate("MATCH (c:Client)
+WHERE NOT c.seg_l3_num IN [312,313,321,322,323,324,325,333,336] RETURN c", "DETACH DELETE c", {batchSize:500})
+yield batches, total return batches, total;
+
 
 MATCH (c:Client)
 DETACH DELETE c;
+
 
 MATCH (c:Segment)
 DETACH DELETE c;
@@ -62,7 +86,6 @@ RETURN count(c);
 MATCH (c:Client)
 SET c.totaltransactionamount = apoc.number.format(toFloat(c.totaltransactionamount), "###,###.00")
 RETURN c
-
 
 CALL apoc.periodic.iterate("MATCH (c:Client)  RETURN c", 
 "SET c.totaltransactionamount = apoc.number.format(toFloat(c.totaltransactionamount), '###,###.00')", 
@@ -107,14 +130,47 @@ ON MATCH SET m.totaltransactioncount = m.totaltransactioncount + 1,
 m.totaltransactionamount=m.totaltransactionamount+toFloat(row.TransactionAmount)
 RETURN count(m);
 
+CALL apoc.periodic.iterate("MATCH (m:Merchant) WHERE m.companyname='Unknown' RETURN m", "DELETE m", 
+{batchSize:100})
+yield batches, total return batches, total;
+
 CALL apoc.periodic.iterate("MATCH (m:Merchant)  RETURN m", 
 "SET m.totaltransactionamount = apoc.number.format(toFloat(m.totaltransactionamount), '###,###.00')",
  {batchSize:100})
 yield batches, total return batches, total;
 
-// <!-- Delete TRANSACTED_AT relaationships:-->
+// <!-- Delete TRANSACTED_AT relationships:-->
 CALL apoc.periodic.iterate("MATCH (c:Client)-[r:TRANSACTED_AT]->(m:Merchant) RETURN r", "DELETE r", {batchSize:100})
 yield batches, total return batches, total;
+
+// <!-- Delete TRANSACTED_AT relationships:-->
+CALL apoc.periodic.iterate("MATCH (m0:Merchant)-[merchant_link:MERCHANT_LINK]->(m1:Merchant) RETURN merchant_link", "DELETE merchant_link", {batchSize:100})
+yield batches, total return batches, total;
+
+// <!-- Create the Company node here: -->
+USING PERIODIC COMMIT 500
+LOAD CSV WITH HEADERS FROM 'file:///clientswipes_202003.csv' AS row
+MERGE (c:Company {companyname:coalesce(row.companyname, "Unknown")})
+ON CREATE SET c.companyindex = coalesce(toInteger(row.companyindex),"Unknown"),
+c.totaltransactioncount = 1,
+c.totaltransactionamount=toFloat(row.TransactionAmount),
+c.period = row.period, 
+c.discretionary = coalesce(toInteger(row.discretionary),"Unknown"),
+c.class_id = coalesce(toInteger(row.class_id),"Unknown"),
+c.division_id = coalesce(toInteger(row.division_id),"Unknown"),
+c.group_id = coalesce(toInteger(row.group_id),"Unknown"),
+c.subclass_id = coalesce(toInteger(row.subclass_id),"Unknown")
+ON MATCH SET c.totaltransactioncount = c.totaltransactioncount + 1, 
+c.totaltransactionamount=c.totaltransactionamount+toFloat(row.TransactionAmount)
+RETURN count(c);
+
+// <!-- ADD the channel value Company node here: -->
+USING PERIODIC COMMIT 500
+LOAD CSV WITH HEADERS FROM 'file:///clientswipes_202003.csv' AS row
+MATCH (m:Merchant {franchisename:coalesce(row.franchisename, "Unknown")})
+SET m.channel = coalesce(toInteger(row.channel),"Unknown")
+RETURN count(m);
+
 
 // <!-- Create transaction relationships here, between Client and Merchant: -->
 USING PERIODIC COMMIT 500
@@ -130,6 +186,27 @@ r.dbprefix=row.dbprefix
 ON MATCH SET r.transactioncount = r.transactioncount + 1,
 r.transactionamount = r.transactionamount + toFloat(row.TransactionAmount)
 RETURN count(*);
+
+
+// <!-- Create COMPANY transaction relationships here, between Client and Company: -->
+USING PERIODIC COMMIT 500
+LOAD CSV WITH HEADERS FROM 'file:///clientswipes_202003_PBCVM.csv' AS row
+MATCH (client:Client {dedupestatic: row.Dedupegroup})
+MATCH (company:Company {companyname: coalesce(row.companyname, "Unknown")})
+MERGE (client)-[r:COMPANY_TRANSACTED_AT]->(company)
+ON CREATE SET r.transactioncount = 1,
+r.transactionamount = toFloat(row.TransactionAmount),
+r.period = row.period,
+r.db=row.db,
+r.dbprefix=row.dbprefix
+ON MATCH SET r.transactioncount = r.transactioncount + 1,
+r.transactionamount = r.transactionamount + toFloat(row.TransactionAmount)
+RETURN count(*);
+
+// DELETE the 'UNKNOWN' Company super node
+CALL apoc.periodic.iterate("MATCH (company:Company {companyname:'Unknown'}) RETURN company", "DETACH DELETE company", {batchSize:100})
+yield batches, total return batches, total;
+
 
 // r.universaldatelist = r.universaldatelist + toInteger(row.universaldate),
 // r.transactiondatelist = r.transactiondatelist + datetime(replace(row.TransactionDate,' ','T'))
@@ -220,18 +297,27 @@ newt.transactionamount = newt.transactionamount + oldt.transactionamount
 DETACH DELETE oldm
 RETURN newm, oldm;
 
-:param minimum_count=>30
+:param minimum_count=>2
 MATCH (client:Client)-[:TRANSACTED_AT]->(oldm:Merchant) 
 WITH oldm,count(client) as rels, collect(client) as clients
-WHERE rels <= $minimum_count
+WHERE rels <= $minimum_count and oldm.companyname<>'Unknown'
 RETURN count(oldm) as node_count;
 
+// Delete ALL Merchants with only 1 transaction leading to it:
+// First check how many nodes in total:
+MATCH (n)
+RETURN COUNT(n) AS n_nodes
+
+:param minimum_count=>2
 MATCH (client:Client)-[:TRANSACTED_AT]->(oldm:Merchant) 
-WITH oldm,count(client) as rels, collect(client) as clients
-WHERE rels <= $minimum_count
-DETACH DELETE oldm
+WITH oldm,count(client) as rels
+WHERE rels <= $minimum_count and oldm.companyname='Unknown'
+DETACH DELETE oldm;
 
-
+CALL apoc.periodic.iterate("MATCH (m:Merchant)
+WHERE m.companyname<>'Unknown'
+RETURN m","DETACH DELETE m",{batchSize:100})
+yield batches, total return batches, total;
 
 CALL apoc.periodic.iterate("MATCH (client:Client)-[:TRANSACTED_AT]->(oldm:Merchant) 
 WITH oldm,count(client) as rels, collect(client) as clients
@@ -263,14 +349,53 @@ DETACH DELETE oldm","RETURN oldm", {batchSize:100})
 yield batches, total return batches, total;
 
 
-
-
 MATCH ()-[t:TRANSACTED_AT]->(m:Merchant)
 WITH m,t, count(t) AS t
 WHERE count=1
 RETURN m.franchisename as merchant, m.companyname as company, count(t) as count;
 
+CALL apoc.periodic.iterate("MATCH (c0:Company)-[ctt:COMPANY_TRANSACTED_AT]-(c1:Company)
+WHERE ID(c0)<ID(c1)
+RETURN ctt","DELETE ctt",{batchSize:100})
+yield batches, total return batches, total;
 
+
+CALL apoc.periodic.iterate("MATCH (c0:Company)-[ctt:COMPANY_LINK]-(c1:Company)
+WHERE ID(c0)<ID(c1)
+RETURN ctt","DELETE ctt",{batchSize:100})
+yield batches, total return batches, total;
+
+
+// For COMPANIES:
+CALL apoc.periodic.iterate("MATCH (company0:Company)<-[ctt0:COMPANY_TRANSACTED_AT]-(client:Client)-[ctt1:COMPANY_TRANSACTED_AT]->(company1:Company)
+WHERE ID(company0) < ID(company1)
+RETURN company0, company1, ctt0, ctt1",
+"MERGE (company0)-[link:COMPANY_LINK]-(company1)
+ON CREATE SET link.count = 1,
+link.count0 = ctt0.count,
+link.count1= ctt1.count, 
+link.ID0=ID(company0),
+link.ID1=ID(company1),
+link.transactioncount0 = ctt0.transactioncount,
+link.transactioncount1 = ctt1.transactioncount,
+link.transactionamount0 = ctt0.transactionamount,
+link.transactionamount1 = ctt1.transactionamount
+ON MATCH SET link.count = link.count + 1,
+link.count0 = link.count0+ctt0.count,
+link.count1 = link.count1+ctt1.count,
+link.transactioncount0 = link.transactioncount0+ctt0.transactioncount,
+link.transactioncount1 = link.transactioncount1+ctt1.transactioncount,
+link.transactionamount0 = link.transactionamount0+ctt0.transactionamount,
+link.transactionamount1 = link.transactionamount1+ctt1.transactionamount
+RETURN link", {batchSize:10, iterateList:true, parallel:true})
+yield batches, total return batches, total;
+
+CALL apoc.periodic.iterate("MATCH (c:Company)
+WHERE c.companyname='Unknown'
+RETURN c","DETACH DELETE c",{batchSize:100})
+yield batches, total return batches, total;
+
+// For MERCHANTS:
 CALL apoc.periodic.iterate("MATCH (merchant0:Merchant)<-[t0:TRANSACTED_AT]-(client:Client)-[t1:TRANSACTED_AT]->(merchant1:Merchant)
 WHERE ID(merchant0) < ID(merchant1)
 RETURN merchant0, merchant1",
@@ -290,13 +415,14 @@ link.count1 = link.count1+t1.count,
 link.transactioncount0 = link.transactioncount0+t0.transactioncount,
 link.transactioncount1 = link.transactioncount1+t1.transactioncount,
 link.transactionamount0 = link.transactionamount0+t0.transactionamount,
-link.transactionamount1 = link.transactionamount1+t1.transactioncount
+link.transactionamount1 = link.transactionamount1+t1.transactionamount
 RETURN link", {batchSize:100})
 yield batches, total return batches, total;
 
-
-MATCH (merchant0:Merchant)<-[t0:TRANSACTED_AT]-(client:Client)-[t1:TRANSACTED_AT]->(merchant1:Merchant)
-WHERE ID(merchant0) < ID(merchant1)
+// This is only for DISCHEM and CLICKS:
+CALL apoc.periodic.iterate("MATCH (merchant0:Merchant)<-[t0:TRANSACTED_AT]-(client:Client)-[t1:TRANSACTED_AT]->(merchant1:Merchant)
+WHERE ID(merchant0) < ID(merchant1) AND merchant0.companyname IN ['DISCHEM', 'CLICKS'] AND merchant1.companyname IN ['DISCHEM', 'CLICKS']
+RETURN merchant0, merchant1, t0, t1","
 MERGE (merchant0)-[link:MERCHANT_LINK]-(merchant1)
 ON CREATE SET link.count = 1,
 link.count0 = t0.count,
@@ -313,14 +439,361 @@ link.count1 = link.count1+t1.count,
 link.transactioncount0 = link.transactioncount0+t0.transactioncount,
 link.transactioncount1 = link.transactioncount1+t1.transactioncount,
 link.transactionamount0 = link.transactionamount0+t0.transactionamount,
-link.transactionamount1 = link.transactionamount1+t1.transactioncount
+link.transactionamount1 = link.transactionamount1+t1.transactionamount
+RETURN link", {batchSize:100})
+yield batches, total return batches, total;
+
+MATCH (merchant0:Merchant)<-[t0:TRANSACTED_AT]-(client:Client)-[t1:TRANSACTED_AT]->(merchant1:Merchant)
+WHERE ID(merchant0) < ID(merchant1) AND 
+merchant0.companyname IN ['DISCHEM', 'CLICKS'] AND 
+merchant1.companyname IN ['DISCHEM', 'CLICKS']
+MERGE (merchant0)-[link:MERCHANT_LINK]-(merchant1)
+ON CREATE SET link.count = 1,
+link.count0 = t0.count,
+link.count1= t1.count, 
+link.ID0=ID(merchant0),
+link.ID1=ID(merchant1),
+link.transactioncount0 = t0.transactioncount,
+link.transactioncount1 = t1.transactioncount,
+link.transactionamount0 = t0.transactionamount,
+link.transactionamount1 = t1.transactionamount
+ON MATCH SET link.count = link.count + 1,
+link.count0 = link.count0+t0.count,
+link.count1 = link.count1+t1.count,
+link.transactioncount0 = link.transactioncount0+t0.transactioncount,
+link.transactioncount1 = link.transactioncount1+t1.transactioncount,
+link.transactionamount0 = link.transactionamount0+t0.transactionamount,
+link.transactionamount1 = link.transactionamount1+t1.transactionamount
 RETURN count(link);
 
-// <!-- ========================================================================================== -->
+// 
+MATCH p=(m0:Merchant)-[rel:MERCHANT_LINK]-(m1:Merchant)
+WHERE m0.companyname = 'DISCHEM' AND m1.companyname='CLICKS'
+RETURN m0.franchisename as dischem_branch, 
+apoc.number.format(toFloat(m0.totaltransactionamount), "###,###.00") as dischem_branch_amount,
+m1.franchisename as clicks_branch,
+m1.totaltransactionamount as clicks_branch_amount,
+rel.transactionamount0 as m0_value_contribution, 
+rel.transactionamount1 as m1_value_contribution, 
+rel.count as feet
+ORDER BY feet DESC;
 
-MATCH (m0:Merchant)-[r:MERCHANT_VALUE_LINK]->(m1:Merchant)  
+
+// =The FEET edge========================================================================================= -->
+
+MATCH (m0:Merchant)-[rel:MERCHANT_LINK]-(m1:Merchant)
+WHERE ID(m0)=rel.ID0 AND ID(m1)=rel.ID1
+RETURN ID(m0) as ID_m0, ID(m1) as ID_m1
+
+MATCH (m0:Merchant)-[r:MERCHANT_FEET_LINK]->(m1:Merchant)  
 WHERE m0<>m1
 DELETE r;
+
+// Here we CREATE MERCHANT_FEET_LINK:
+MATCH (merchant0:Merchant)<-[t0:TRANSACTED_AT]-(client:Client)-[t1:TRANSACTED_AT]->(merchant1:Merchant)
+WHERE ID(merchant0) < ID(merchant1) AND 
+merchant0.companyname IN ['NANDOS'] AND 
+merchant1.companyname IN ['NANDOS']
+MERGE (merchant0)-[link:MERCHANT_FEET_LINK]-(merchant1)
+ON CREATE SET link.count = 1,
+link.count0 = t0.count,
+link.count1= t1.count, 
+link.ID0=ID(merchant0),
+link.ID1=ID(merchant1),
+link.transactioncount0 = t0.transactioncount,
+link.transactioncount1 = t1.transactioncount,
+link.transactionamount0 = t0.transactionamount,
+link.transactionamount1 = t1.transactionamount
+ON MATCH SET link.count = link.count + 1,
+link.count0 = link.count0+t0.count,
+link.count1 = link.count1+t1.count,
+link.transactioncount0 = link.transactioncount0+t0.transactioncount,
+link.transactioncount1 = link.transactioncount1+t1.transactioncount,
+link.transactionamount0 = link.transactionamount0+t0.transactionamount,
+link.transactionamount1 = link.transactionamount1+t1.transactionamount
+RETURN count(link);
+
+// Count relationships:
+MATCH (m0:Merchant)-[r:MERCHANT_FEET_LINK]-(m1:Merchant)  
+WHERE ID(m0)<ID(m1)
+RETURN COUNT(r) as count;
+// =258,060
+
+// Here we CORRECT the MERCHANT_LINK_FEET direction, which way did feet move
+MATCH (m0:Merchant)-[rel:MERCHANT_FEET_LINK]-(m1:Merchant)
+WHERE ID(m0)=rel.ID0 AND ID(m1)=rel.ID1
+WITH rel.transactioncount0<rel.transactioncount1 AS mustpointright, 
+rel.transactioncount0>rel.transactioncount1 AS mustpointleft,
+NOT (startNode(rel) = m0) as pointsleft,
+rel as relationship,(startNode(rel) = m0) as pointsright,m0,m1,rel,
+rel.transactioncount0 as transactioncount0,
+rel.transactioncount1 as transactioncount1, rel.ID0 as ID0, rel.ID1 as ID1, rel.count as count, 
+ID(rel) as rel_id
+FOREACH (p IN CASE WHEN (mustpointright AND pointsleft) THEN [1] ELSE [] END |
+    DELETE relationship
+    MERGE (m0)-[newrel:MERCHANT_FEET_LINK]->(m1)
+        ON CREATE SET newrel.transactioncount0 = transactioncount0,
+        newrel.transactioncount1=transactioncount1,
+        newrel.ID0=ID0,
+        newrel.ID1=ID1,
+        newrel.count=count
+)
+FOREACH (p IN CASE WHEN (mustpointleft AND pointsright) THEN [1] ELSE [] END |
+    DELETE relationship
+    MERGE (m0)<-[newrel:MERCHANT_FEET_LINK]-(m1)
+        ON CREATE SET newrel.transactioncount0 = transactioncount0,
+        newrel.transactioncount1=transactioncount1,
+        newrel.ID0=ID0,
+        newrel.ID1=ID1, 
+        newrel.count=count
+);
+
+// Count relationships:
+MATCH (m0:Merchant)-[r:MERCHANT_FEET_LINK]-(m1:Merchant)  
+WHERE ID(m0)<ID(m1)
+RETURN COUNT(r) as count;
+// = 258,060
+
+// Check that all directions match:
+MATCH (m0:Merchant)-[rel:MERCHANT_FEET_LINK]-(m1:Merchant)
+WHERE ID(m0)=rel.ID0 AND ID(m1)=rel.ID1
+WITH m0,m1,rel, rel.transactioncount0<=rel.transactioncount1 AS mustpointright, 
+rel.transactioncount0>rel.transactioncount1 AS mustpointleft,
+NOT (startNode(rel) = m0) as pointsleft,
+(startNode(rel) = m0) as pointsright
+RETURN ID(m0) as IDm0, ID(m1) as IDm1, m0.franchisename as franchisename1,
+m1.franchisename as franchisename2, rel.transactioncount0 as transactioncount0,
+rel.transactioncount1 as transactioncount1,
+mustpointright, pointsright, mustpointleft, pointsleft;
+
+MATCH (m0:Merchant)-[r:MERCHANT_FEET_LINK]->(m1:Merchant)  
+WHERE m0<>m1
+DELETE r;
+
+MATCH (m0:Merchant)-[mfl:MERCHANT_FEET_LINK]->(m1:Merchant {franchisename:"DISCHEM WORCESTER"}) 
+RETURN m0.franchisename as franchisename, mfl.count as count, m1.franchisename as target
+ORDER BY count ASC
+
+:param minimum_count=>1
+MATCH (client:Client)-[:TRANSACTED_AT]->(oldm:Merchant {companyname:"CLICKS"}) 
+WITH oldm,count(client) as rels
+WHERE rels <= $minimum_count 
+DETACH DELETE oldm;
+
+:param minimum_count=>1
+MATCH (client:Client)-[:TRANSACTED_AT]->(oldm:Merchant {companyname:"DISCHEM"}) 
+WITH oldm,count(client) as rels
+WHERE rels <= $minimum_count 
+DETACH DELETE oldm;
+
+:param minimum_count=>1
+MATCH (m0:Merchant)-[mfl:MERCHANT_FEET_LINK]-(m1:Merchant) 
+WHERE ID(m0)<ID(m1) AND mfl.count=1
+DELETE mfl;
+RETURN m0.franchisename as franchisename0, m1.franchisename as franchisename1, mfl.count as count;
+
+
+:param minimum_count=1
+MATCH (m0:Merchant)-[mfl:MERCHANT_FEET_LINK]-(m1:Merchant)
+WHERE ID(m0)<ID(m1)
+RETURN m0.franchisename as franchisename0, m1.franchisename as franchisename1, mfl.count as count
+// WITH oldm,count(client) as rels
+// WHERE rels <= $minimum_count and oldm.companyname='Unknown'
+// DETACH DELETE oldm;
+
+// Create graph:
+CALL gds.graph.create(
+    'DischemClicksFeetGraph',
+    'Merchant',
+    'MERCHANT_FEET_LINK',
+    {
+        relationshipProperties: 'count'
+    }
+);
+
+// verify graph existence:
+CALL gds.graph.list()
+YIELD graphName, nodeProjection, relationshipProjection, nodeQuery, relationshipQuery,
+      nodeCount, relationshipCount, schema, degreeDistribution, creationTime, modificationTime;
+
+CALL gds.pageRank.stream('DischemClicksFeetGraph', { maxIterations: 20, dampingFactor: 0.85 })
+YIELD nodeId, score
+RETURN gds.util.asNode(nodeId).franchisename AS franchisename, score
+ORDER BY score DESC, franchisename ASC;
+
+
+
+// =The VALUE edge========================================================================================= -->
+
+MATCH (m0:Merchant)-[rel:MERCHANT_LINK]-(m1:Merchant)
+WHERE ID(m0)=rel.ID0 AND ID(m1)=rel.ID1
+RETURN ID(m0) as ID_m0, ID(m1) as ID_m1
+
+MATCH (m0:Merchant)-[r:MERCHANT_VALUE_LINK]->(m1:Merchant)  
+DELETE r;
+
+// Here we CREATE MERCHANT_VALUE_LINK:
+MATCH (merchant0:Merchant)<-[t0:TRANSACTED_AT]-(client:Client)-[t1:TRANSACTED_AT]->(merchant1:Merchant)
+WHERE ID(merchant0) < ID(merchant1) AND 
+merchant0.companyname IN ['DISCHEM', 'CLICKS'] AND 
+merchant1.companyname IN ['DISCHEM', 'CLICKS']
+MERGE (merchant0)-[link:MERCHANT_VALUE_LINK]-(merchant1)
+ON CREATE SET link.count = 1,
+link.count0 = t0.count,
+link.count1= t1.count, 
+link.ID0=ID(merchant0),
+link.ID1=ID(merchant1),
+link.transactioncount0 = t0.transactioncount,
+link.transactioncount1 = t1.transactioncount,
+link.transactionamount0 = t0.transactionamount,
+link.transactionamount1 = t1.transactionamount
+ON MATCH SET link.count = link.count + 1,
+link.count0 = link.count0+t0.count,
+link.count1 = link.count1+t1.count,
+link.transactioncount0 = link.transactioncount0+t0.transactioncount,
+link.transactioncount1 = link.transactioncount1+t1.transactioncount,
+link.transactionamount0 = link.transactionamount0+t0.transactionamount,
+link.transactionamount1 = link.transactionamount1+t1.transactionamount
+RETURN count(link);
+
+// Count relationships:
+MATCH (m0:Merchant)-[r:MERCHANT_VALUE_LINK]-(m1:Merchant)  
+WHERE ID(m0)<ID(m1)
+RETURN COUNT(r) as count;
+// =258,060
+
+// Here we CORRECT the MERCHANT_LINK_FEET direction, which way did feet move
+MATCH (m0:Merchant)-[rel:MERCHANT_VALUE_LINK]-(m1:Merchant)
+WHERE ID(m0)=rel.ID0 AND ID(m1)=rel.ID1
+WITH rel.transactionamount0>rel.transactionamount1 AS mustpointright, 
+rel.transactionamount0<rel.transactionamount1 AS mustpointleft,
+NOT (startNode(rel) = m0) as pointsleft,
+rel as relationship,(startNode(rel) = m0) as pointsright,m0,m1,rel,
+rel.transactionamount0 as transactionamount0,
+rel.transactionamount1 as transactionamount1, rel.ID0 as ID0, rel.ID1 as ID1, rel.count as count, 
+ID(rel) as rel_id
+FOREACH (p IN CASE WHEN (mustpointright AND pointsleft) THEN [1] ELSE [] END |
+    DELETE relationship
+    MERGE (m0)-[newrel:MERCHANT_VALUE_LINK]->(m1)
+        ON CREATE SET newrel.transactionamount0 = transactionamount0,
+        newrel.transactionamount1=transactionamount1,
+        newrel.ID0=ID0,
+        newrel.ID1=ID1,
+        newrel.count=count
+)
+FOREACH (p IN CASE WHEN (mustpointleft AND pointsright) THEN [1] ELSE [] END |
+    DELETE relationship
+    MERGE (m0)<-[newrel:MERCHANT_VALUE_LINK]-(m1)
+        ON CREATE SET newrel.transactionamount0 = transactionamount0,
+        newrel.transactionamount1=transactionamount1,
+        newrel.ID0=ID0,
+        newrel.ID1=ID1, 
+        newrel.count=count
+);
+
+// Count relationships:
+MATCH (m0:Merchant)-[r:MERCHANT_VALUE_LINK]-(m1:Merchant)  
+WHERE ID(m0)<ID(m1)
+RETURN COUNT(r) as count;
+// = 258,060
+
+// Check that all directions match:
+MATCH (m0:Merchant)-[rel:MERCHANT_VALUE_LINK]-(m1:Merchant)
+WHERE ID(m0)=rel.ID0 AND ID(m1)=rel.ID1
+WITH m0,m1,rel, rel.transactionamount0>=rel.transactionamount1 AS mustpointright, 
+rel.transactionamount0<rel.transactionamount1 AS mustpointleft,
+(startNode(rel) = m1) as pointsleft,
+(startNode(rel) = m0) as pointsright
+RETURN ID(m0) as IDm0, ID(m1) as IDm1, rel.transactionamount0 as transactionamount0,
+rel.transactionamount1 as transactionamount1,
+mustpointright, pointsright, mustpointleft, pointsleft;
+
+MATCH (m0:Merchant)-[r:MERCHANT_FEET_LINK]->(m1:Merchant)  
+WHERE m0<>m1
+DELETE r;
+
+// The VALUE edge =THIS IS NOW REDUNDANT!!!=================================================================================
+// Create the TEMP_MERCHANT_LINK_VALUE edge:
+// MATCH (m0:Merchant)-[r:MERCHANT_LINK_VALUE]->(m1:Merchant)  
+// DELETE r;
+
+// MATCH (m0:Merchant)-[r:MERCHANT_VALUE_LINK]->(m1:Merchant)  
+// DELETE r;
+
+// MATCH (merchant0:Merchant)<-[t0:TRANSACTED_AT]-(client:Client)-[t1:TRANSACTED_AT]->(merchant1:Merchant)
+// WHERE ID(merchant0) < ID(merchant1) AND 
+// merchant0.companyname IN ['DISCHEM', 'CLICKS'] AND 
+// merchant1.companyname IN ['DISCHEM', 'CLICKS']
+// MERGE (merchant0)-[link:MERCHANT_VALUE_LINK]-(merchant1)
+// ON CREATE SET link.count = 1,
+// link.count0 = t0.count,
+// link.count1= t1.count, 
+// link.ID0=ID(merchant0),
+// link.ID1=ID(merchant1),
+// link.transactioncount0 = t0.transactioncount,
+// link.transactioncount1 = t1.transactioncount,
+// link.transactionamount0 = t0.transactionamount,
+// link.transactionamount1 = t1.transactionamount
+// ON MATCH SET link.count = link.count + 1,
+// link.count0 = link.count0+t0.count,
+// link.count1 = link.count1+t1.count,
+// link.transactioncount0 = link.transactioncount0+t0.transactioncount,
+// link.transactioncount1 = link.transactioncount1+t1.transactioncount,
+// link.transactionamount0 = link.transactionamount0+t0.transactionamount,
+// link.transactionamount1 = link.transactionamount1+t1.transactionamount
+// RETURN count(link);
+
+// // Correct the direction 
+// MATCH (m0:Merchant)-[rel:MERCHANT_LINK_VALUE]-(m1:Merchant)
+// WHERE ID(m0)=rel.ID0 AND ID(m1)=rel.ID1
+// WITH rel.transactionamount0>rel.transactionamount1 AS mustpointright, 
+// rel.transactionamount0<rel.transactionamount1 AS mustpointleft,
+// rel as relationship,(startNode(rel) = m0) as isright,m0,m1,rel,
+// NOT (startNode(rel) = m0) as isleft,
+// rel.transactionamount0 as transactionamount0,
+// rel.transactionamount1 as transactionamount1, rel.ID0 as ID0, rel.ID1 as ID1, rel.count as count, 
+// ID(rel) as rel_id
+// FOREACH (p IN CASE WHEN (mustpointright AND isleft) THEN [1] ELSE [] END |
+//     MERGE (m0)-[newrel:MERCHANT_LINK_VALUE]->(m1)
+//         ON CREATE SET newrel.transactionamount0 = transactionamount0,
+//         newrel.transactionamount1=transactionamount1,
+//         newrel.ID0=ID0,
+//         newrel.ID1=ID1,
+//         newrel.count=count
+//         DELETE rel
+// )
+// FOREACH (p IN CASE WHEN (mustpointleft and isright) THEN [1] ELSE [] END |
+//     MERGE (m0)<-[newrel:MERCHANT_LINK_VALUE]-(m1)
+//         ON CREATE SET newrel.transactionamount0 = transactionamount0,
+//         newrel.transactionamount1=transactionamount1,
+//         newrel.ID0=ID0,
+//         newrel.ID1=ID1, 
+//         newrel.count=count
+//         DELETE rel
+// );
+
+
+// // Check 
+// MATCH (m0:Merchant)-[rel:MERCHANT_LINK]-(m1:Merchant)
+// WHERE ID(m0)=rel.ID0 AND ID(m1)=rel.ID1
+// WITH rel.transactioncount0<rel.transactioncount1 AS pointright, 
+// rel as relationship,(startNode(rel) = m0) as isright,m0,m1,
+// rel.transactioncount0 as count0,rel.transactioncount1 as count1, rel.ID0 as ID0, rel.ID1 as ID1, rel.count as count, 
+// ID(rel) as rel_id
+// RETURN pointright, isright, NOT isright AS isleft ;
+
+
+// // 
+// MATCH (m0:Merchant)-[r:MERCHANT_VALUE_LINK]->(m1:Merchant)  
+// WHERE m0<>m1
+// DELETE r;
+
+// DELETE all MERCHANT_LINKS ====================================================================
+CALL apoc.periodic.iterate("MATCH (m0:Merchant)-[r:MERCHANT_LINK]-(m1:Merchant)
+WHERE ID(m0)<ID(m1) 
+RETURN r","DELETE r",{batchSize:100})
+yield batches, total return batches, total;
+
 
 MATCH (merchant0:Merchant {companyname: 'DISCHEM'})<-[t0:TRANSACTED_AT]-(client:Client)-[t1:TRANSACTED_AT]->(merchant1:Merchant {companyname: 'DISCHEM'})
 WHERE merchant0.franchisename<>merchant1.franchisename 
@@ -347,21 +820,21 @@ ELSE 3 END AS result
 
 <!-- https://neo4j.com/docs/graph-data-science/current/algorithms/page-rank/ -->
 CALL gds.graph.create(
-    'DischemGraph',
+    'DischemClicksGraph',
     'Merchant',
-    'MERCHANT_LINK',
+    'MERCHANT_LINK_FEET',
     {
         relationshipProperties: 'count'
     }
 );
-
-CALL gds.pageRank.stream('DischemGraph', { maxIterations: 20, dampingFactor: 0.85 })
+// CALL gds.algo.pageRank.stream('my-native-graph') YIELD nodeId, score;
+CALL gds.pageRank.stream('DischemClicksGraph', { maxIterations: 20, dampingFactor: 0.85 })
 YIELD nodeId, score
 RETURN gds.util.asNode(nodeId).franchisename AS franchisename, score
 ORDER BY score DESC, franchisename ASC;
 
 
-CALL gds.pageRank.stream('DischemGraph', {
+CALL gds.pageRank.stream('DischemClicksGraph', {
   maxIterations: 20,
   dampingFactor: 0.85,
   relationshipWeightProperty: 'count'
@@ -369,6 +842,7 @@ CALL gds.pageRank.stream('DischemGraph', {
 YIELD nodeId, score
 RETURN gds.util.asNode(nodeId).franchisename AS franchisename, score
 ORDER BY score DESC, franchisename ASC;
+
 
 
 CALL gds.pageRank.write('DischemGraph', {
@@ -378,3 +852,45 @@ CALL gds.pageRank.write('DischemGraph', {
   relationshipWeightProperty: 'count'
 })
 YIELD nodePropertiesWritten AS writtenProperties, ranIterations;
+
+MATCH (client:Client)-[:TRANSACTED_AT]-(m:Merchant) 
+WHERE m.franchisename IN ['PNP CRP DEINFERN SQUAR','WOOLWORTHS MAROUN SQ','Spar Broadacres Spar','Clicks Dairnfern']
+WHERE NOT (client)-[:TRANSACTED_AT]-(m:Merchant {franchisename:'DIS-CHEM DAINFERN'})
+RETURN client
+
+// = The 56101 project =================================================================================================
+// In  this project we only look at merchants belonging to the subclass_id = 56101 (fast foods).
+// The goal is to investigate the quality of community detection using the Louvain algorithm in the Neo4j db
+// Can we cluster these into discernible hubs, how many would here be  and does it separate clients on the same basis?
+
+MATCH (n:Merchant {subclass_id:56101}) WHERE NOTRETURN n LIMIT 25
+
+
+// <!-- Create transaction relationships here, between Client and Merchant: -->
+USING PERIODIC COMMIT 500
+LOAD CSV WITH HEADERS FROM 'file:///clientswipes_202003.csv' AS row
+MATCH (c:Client {dedupestatic: row.Dedupegroup})
+MATCH (m:Merchant {franchisename: coalesce(row.franchisename, "Unknown")})
+FOREACH(ignoreMe IN CASE WHEN toInteger(row.universaldate) = 2 THEN [1] ELSE [] END|
+    MERGE (c)-[r:TRANSACTED_ON_UD_2]->(m) 
+    ON CREATE SET r.transactioncount = 1,
+    r.transactionamount = toFloat(row.TransactionAmount)
+    ON MATCH SET r.transactioncount = r.transactioncount + 1,
+    r.transactionamount = r.transactionamount + toFloat(row.TransactionAmount) 
+);
+
+CALL apoc.periodic.iterate("USING PERIODIC COMMIT 500
+LOAD CSV WITH HEADERS FROM 'file:///clientswipes_202003.csv' AS row
+MATCH (c:Client {dedupestatic: row.Dedupegroup})
+MATCH (m:Merchant {franchisename: coalesce(row.franchisename, 'Unknown')}) 
+RETURN row, c, m",
+"FOREACH(ignoreMe IN CASE WHEN toInteger(row.universaldate) = 2 THEN [1] ELSE [] END|
+    MERGE (c)-[r:TRANSACTED_ON_UD_2]->(m) 
+    ON CREATE SET r.transactioncount = 1,
+    r.transactionamount = toFloat(row.TransactionAmount)
+    ON MATCH SET r.transactioncount = r.transactioncount + 1,
+    r.transactionamount = r.transactionamount + toFloat(row.TransactionAmount) 
+)",{batchSize:100})
+yield batches, total return batches, total;
+
+

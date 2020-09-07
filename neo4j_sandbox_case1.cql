@@ -34,10 +34,6 @@
 // https://www.tecmint.com/clear-ram-memory-cache-buffer-and-swap-space-on-linux/
 // CLEAR swap space: swapoff -a && swapon -a
 
-CREATE CONSTRAINT ON (c:Client) ASSERT c.dedupestatic IS UNIQUE;
-CREATE CONSTRAINT ON (m:Merchant) ASSERT m.franchisename IS UNIQUE;
-CREATE CONSTRAINT ON (s:Segment) ASSERT s.seg_l3_num IS UNIQUE;
-
 MATCH (c:Client)
 DETACH DELETE c;
 
@@ -47,6 +43,12 @@ DETACH DELETE m;
 MATCH (c:Segment)
 DETACH DELETE c;
 
+
+CREATE CONSTRAINT ON (c:Client) ASSERT c.dedupestatic IS UNIQUE;
+CREATE CONSTRAINT ON (m:Merchant) ASSERT m.franchisename IS UNIQUE;
+CREATE CONSTRAINT ON (s:Segment) ASSERT s.seg_l3_num IS UNIQUE;
+
+
 CALL apoc.periodic.iterate("MATCH (c:Client) RETURN c", "DETACH DELETE c", {batchSize:500})
 yield batches, total return batches, total;
 
@@ -55,7 +57,7 @@ yield batches, total return batches, total;
 
 // <!-- Create the Client node here: -->
 USING PERIODIC COMMIT 500
-LOAD CSV WITH HEADERS FROM 'file:///clientswipes_202003_sandbox.csv' AS row
+LOAD CSV WITH HEADERS FROM 'file:///clientswipes_202003_sandbox_case1.csv' AS row
 MERGE (c:Client {dedupestatic: row.Dedupegroup})
 ON CREATE SET c.totaltransactionamount = toFloat(row.TransactionAmount),
 c.totaltransactioncount = 1,
@@ -76,29 +78,9 @@ CALL apoc.periodic.iterate("MATCH (c:Client)  RETURN c",
 {batchSize:100})
 yield batches, total return batches, total;
 
-
-// <!-- Create the Segment node here: -->
-USING PERIODIC COMMIT 500
-LOAD CSV WITH HEADERS FROM 'file:///clientswipes_202003_sandbox.csv' AS row
-MERGE (s:Segment {seg_l3_num: toInteger(row.Seg_L3_Num)})
-ON CREATE SET s.totaltransactionamount = toFloat(row.TransactionAmount),
-s.totaltransactioncount = 1,
-s.seg_l3_str=row.Seg_L3_STR,
-s.period=row.period
-ON MATCH SET s.totaltransactioncount = s.totaltransactioncount + 1, 
-s.totaltransactionamount=s.totaltransactionamount+toFloat(row.TransactionAmount)
-RETURN count(s);
-
-
-CALL apoc.periodic.iterate("MATCH (s:Segment)  RETURN s", 
-"SET s.totaltransactionamount = apoc.number.format(toFloat(s.totaltransactionamount), '###,###.00')", 
-{batchSize:100})
-yield batches, total return batches, total;
-
-
 // <!-- Create the Merchant node here: -->
 USING PERIODIC COMMIT 500
-LOAD CSV WITH HEADERS FROM 'file:///clientswipes_202003_sandbox.csv' AS row
+LOAD CSV WITH HEADERS FROM 'file:///clientswipes_202003_sandbox_case1.csv' AS row
 MERGE (m:Merchant {franchisename:coalesce(row.franchisename, "Unknown")})
 ON CREATE SET m.companyindex = coalesce(toInteger(row.companyindex),"Unknown"),
 m.companyname = coalesce(row.companyname,"Unknown"), 
@@ -113,15 +95,6 @@ m.subclass_id = coalesce(toInteger(row.subclass_id),"Unknown")
 ON MATCH SET m.totaltransactioncount = m.totaltransactioncount + 1, 
 m.totaltransactionamount=m.totaltransactionamount+toFloat(row.TransactionAmount)
 RETURN count(m);
-
-CALL apoc.periodic.iterate("MATCH (m:Merchant) WHERE m.companyname='Unknown' RETURN m", "DELETE m", 
-{batchSize:100})
-yield batches, total return batches, total;
-
-CALL apoc.periodic.iterate("MATCH (m:Merchant)  RETURN m", 
-"SET m.totaltransactionamount = apoc.number.format(toFloat(m.totaltransactionamount), '###,###.00')",
- {batchSize:100})
-yield batches, total return batches, total;
 
 // <!-- Delete TRANSACTED_AT relationships:-->
 CALL apoc.periodic.iterate("MATCH (c:Client)-[r:TRANSACTED_AT]->(m:Merchant) RETURN r", "DELETE r", {batchSize:100})
@@ -131,28 +104,9 @@ yield batches, total return batches, total;
 CALL apoc.periodic.iterate("MATCH (m0:Merchant)-[merchant_link:MERCHANT_LINK]->(m1:Merchant) RETURN merchant_link", "DELETE merchant_link", {batchSize:100})
 yield batches, total return batches, total;
 
-// <!-- Create the Company node here: -->
-USING PERIODIC COMMIT 500
-LOAD CSV WITH HEADERS FROM 'file:///clientswipes_202003_sandbox.csv' AS row
-MERGE (m:Merchant {franchisename:coalesce(row.franchisename, "Unknown")})
-ON CREATE SET m.companyindex = coalesce(toInteger(row.companyindex),"Unknown"),
-m.companyname = coalesce(row.companyname,"Unknown"), 
-m.totaltransactioncount = 1,
-m.totaltransactionamount=toFloat(row.TransactionAmount),
-m.period = row.period, 
-m.discretionary = coalesce(toInteger(row.discretionary),"Unknown"),
-m.class_id = coalesce(toInteger(row.class_id),"Unknown"),
-m.division_id = coalesce(toInteger(row.division_id),"Unknown"),
-m.group_id = coalesce(toInteger(row.group_id),"Unknown"),
-m.subclass_id = coalesce(toInteger(row.subclass_id),"Unknown")
-ON MATCH SET m.totaltransactioncount = m.totaltransactioncount + 1, 
-m.totaltransactionamount=m.totaltransactionamount+toFloat(row.TransactionAmount)
-RETURN count(m);
-
-
 // <!-- Create transaction relationships here, between Client and Merchant: -->
 USING PERIODIC COMMIT 500
-LOAD CSV WITH HEADERS FROM 'file:///clientswipes_202003_sandbox.csv' AS row
+LOAD CSV WITH HEADERS FROM 'file:///clientswipes_202003_sandbox_case1.csv' AS row
 MATCH (c:Client {dedupestatic: row.Dedupegroup})
 MATCH (m:Merchant {franchisename: coalesce(row.franchisename, "Unknown")})
 MERGE (c)-[r:TRANSACTED_AT]->(m)
@@ -176,7 +130,7 @@ SET t.transactionamount=0
 RETURN c
 
 USING PERIODIC COMMIT 500
-LOAD CSV WITH HEADERS FROM 'file:///clientswipes_202003_sandbox.csv' AS row
+LOAD CSV WITH HEADERS FROM 'file:///clientswipes_202003_sandbox_case1.csv' AS row
 MATCH (c:Client {dedupestatic: row.Dedupegroup})
 MATCH (m:Merchant {franchisename: coalesce(row.franchisename, "Unknown")})
 MERGE (c)-[r:TRANSACTED_AT]->(m)
@@ -492,6 +446,9 @@ CALL gds.graph.create(
         relationshipProperties: 'transactioncount'
     }
 );
+CALL gds.graph.list();
+CALL gds.graph.drop('merchant_feet_link_graph') YIELD graphName;
+
 
 // verify graph existence:
 CALL gds.graph.list()
@@ -518,12 +475,19 @@ CALL gds.graph.create(
         relationshipProperties: 'count'
     }
 );
-
+sandbox_graph
+CALL gds.graph.drop('myGraph') YIELD graphName;
+CALL gds.graph.drop('sandbox_graph') YIELD graphName;
+CALL gds.louvain.stream('merchant_feet_link_graph')
+YIELD nodeId, communityId, intermediateCommunityIds
+RETURN gds.util.asNode(nodeId).franchisename AS franchisename, communityId, intermediateCommunityIds
+ORDER BY franchisename ASC;
 
 CALL gds.louvain.stream('merchant_feet_link_graph')
 YIELD nodeId, communityId, intermediateCommunityIds
 RETURN gds.util.asNode(nodeId).franchisename AS franchisename, communityId, intermediateCommunityIds
 ORDER BY franchisename ASC;
+
 // =The VALUE edge========================================================================================= -->
 
 MATCH (m0:Merchant)-[rel:MERCHANT_LINK]-(m1:Merchant)

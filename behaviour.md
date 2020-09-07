@@ -89,7 +89,7 @@ ON MATCH SET m.totaltransactioncount = m.totaltransactioncount + 1,
 m.totaltransactionamount=m.totaltransactionamount+toFloat(row.TransactionAmount)
 RETURN count(m);
 
-// <!-- Delete TRANSACTED_AT relaationships:-->
+// <!-- Delete TRANSACTED_AT relationships:-->
 CALL apoc.periodic.iterate("MATCH (c:Client)-[r:TRANSACTED_AT]->(m:Merchant) RETURN r", "DELETE r", {batchSize:100})
 yield batches, total return batches, total;
 
