@@ -20,6 +20,12 @@ WHERE rels <=2
 RETURN oldm.franchisename as franchisename,rels
 ORDER BY franchisename;
 
+// Rank  the number of merchant nodes with only one relationship:
+MATCH (c0:Client)-[cl:CLIENT_LINK_7916]-(c1:Client) 
+WHERE ID(c0)<ID(c1)
+RETURN cl.count as count, COUNT(cl) as number
+ORDER BY count ASC;
+
 MATCH (client:Client)-[:TRANSACTED_AT]->(oldm:Merchant {subclass_id:56101}) 
 WITH oldm,count(client) as rels, collect(client) as clients
 // WHERE rels <=2
@@ -368,6 +374,50 @@ MATCH (m:Merchant {subclass_id:56101})
 RETURN COUNT(m.triadic_56101_community) as membercount, m.triadic_56101_community as triadic_56101_community
 ORDER BY membercount ASC;
 
+// The following gives good results for TRIADIC_MERCHANT_FEET_LINK 
+// on subclass_id=56101 and LIMITED to  count>1 ======================================
+MATCH (m0:Merchant)-[rel:TRIADIC_MERCHANT_FEET_LINK]->(m1:Merchant)
+RETURN rel.count as count, count(rel.count)
+
+CALL gds.graph.drop('triadic_56101_graph') YIELD graphName;
+
+CALL gds.graph.create.cypher(
+    'triadic_56101_graph',
+    'MATCH (m0:Merchant {subclass_id:56101}) RETURN id(m0) AS id, m0.totaltransactionamount as totaltransactionamount, m0.totaltransactioncount as totaltransactioncount',
+    'MATCH (m0:Merchant)-[rel:TRIADIC_MERCHANT_FEET_LINK]->(m1:Merchant) 
+    WHERE rel.count>1 RETURN id(m0) AS source, id(m1) AS target, rel.count as count'
+)
+YIELD graphName, nodeCount, relationshipCount, createMillis;
+
+CALL gds.louvain.stream('triadic_56101_graph', { relationshipWeightProperty: 'count', 
+maxLevels:10, 
+maxIterations:200, includeIntermediateCommunities:true})
+YIELD nodeId, communityId, intermediateCommunityIds
+RETURN gds.util.asNode(nodeId).franchisename AS franchisename, communityId, intermediateCommunityIds
+ORDER BY communityId DESC;
+
+MATCH (m:Merchant)
+WHERE EXISTS(m.triadic_56101_community)
+REMOVE m.triadic_56101_community
+RETURN m;
+
+CALL gds.louvain.write('triadic_56101_graph', { relationshipWeightProperty: 'count', 
+maxLevels:10, 
+maxIterations:200, writeProperty: 'triadic_56101_community' })
+YIELD communityCount, modularity, modularities
+
+MATCH (m:Merchant)
+WHERE EXISTS(m.triadic_56101_community)
+RETURN m
+LIMIT 25
+
+
+MATCH (m:Merchant {subclass_id:56101})
+RETURN COUNT(m.triadic_56101_community) as membercount, m.triadic_56101_community as triadic_56101_community
+ORDER BY membercount ASC;
+
+
+
 
 // =The subclass_id super nodes==============================================================================
 ["SAUSAGE",
@@ -497,15 +547,46 @@ MATCH (c:Client {subclass_id:56101})
 RETURN COUNT(m.community) as membercount, m.biadic_community as biadic_community
 ORDER BY membercount ASC;
 
+
+// List client communities in merchant community 7916
 MATCH (c:Client) 
 WHERE EXISTS(c.client_link_community_7916) 
 RETURN COUNT(c.client_link_community_7916) as count, c.client_link_community_7916 as client_link_community
 ORDER BY count ASC
 
++-------------------------------+
+| count | client_link_community |
++-------------------------------+
+| 48    | 822                   |
+| 108   | 232                   |
+| 112   | 44                    |
+| 146   | 86                    |
+| 172   | 1415                  |
+| 206   | 27                    |
+| 237   | 220                   |
+| 238   | 1779                  |
+| 288   | 95                    |
+| 333   | 75                    |
+| 372   | 31                    |
+| 429   | 176                   |
++-------------------------------|
 
+// Observe the first cluster/community 822:
 MATCH (c:Client)-[t:TRANSACTED_AT]->(m:Merchant)
 WHERE EXISTS(c.client_link_community_7916) AND c.client_link_community_7916=822 AND m.subclass_id=56101
 RETURN c,t,m
+
+CALL gds.graph.create.cypher(
+    'triadic_graph_7916_822',
+    'MATCH (c0:Client) WHERE c0.client_link_community_7916=822 RETURN id(c0) AS id',
+    'MATCH (c0:Client)-[cl:CLIENT_LINK_7916]->(c1:Client) WHERE c0.client_link_community_7916=822 AND c1.client_link_community_7916=822 RETURN id(c0) AS source, id(c1) AS target, cl.count as count'
+)
+YIELD graphName, nodeCount, relationshipCount, createMillis;
+
+CALL gds.pageRank.stream('triadic_graph_7916_822', { maxIterations: 20, dampingFactor: 0.85 })
+    YIELD nodeId, score
+    RETURN gds.util.asNode(nodeId).dedupestatic AS dedupestatic, score
+    ORDER BY score DESC, dedupestatic ASC;
 
 
 MATCH (c:Client)-[t:TRANSACTED_AT]->(m:Merchant)
@@ -518,6 +599,15 @@ WHERE EXISTS(c.client_link_community_7916) AND c.client_link_community_7916=44 A
 RETURN c,t,m
 
 
+
+MATCH (c:Client)-[t:TRANSACTED_AT]->(m:Merchant)
+WHERE EXISTS(c.client_link_community_7916) AND c.client_link_community_7916=232 AND m.subclass_id=56101
+RETURN c.client_link_community_7916 AS client_link_community_7916,  
+m.franchisename as franchisename, 
+SUM(t.transactionamount) AS transactionamount, 
+SUM(t.transactioncount) AS transactioncount
+
+
 // BLOOM =========================================================================================================
 MATCH (m0:Merchant {subclass_id:56101})-[t:TRIADIC_MERCHANT_FEET_LINK]-(m1:Merchant {56101})
 WHERE ID(m0)<ID(m1)
@@ -527,4 +617,6 @@ LIMIT 25
 MATCH (m0:Merchant {subclass_id:56101})-[t:TRIADIC_MERCHANT_FEET_LINK]-(m1:Merchant {subclass_id: 56101})
 WHERE ID(m0)<ID(m1) AND m0.triadic_56101_community=9137 AND m1.triadic_56101_community=9137 
 RETURN m0,t,m1
+
+
 

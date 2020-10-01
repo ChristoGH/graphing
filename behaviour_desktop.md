@@ -9,7 +9,7 @@
 // sudo cp /var/lib/neo4j/import/clientswipes_202003_neo4j.csv /home/lnr-ai/.config/Neo4j\ Desktop/Application/neo4jDatabases/database-c8878123-c937-4a52-9271-227eec393f53/installation-4.0.3/import/
 // clientswipes_202003_neo4j.csv"
 // sudo mv /media/lnr-ai/downloads/home/christo/data/clientswipes_202003_PBCVM.csv /var/lib/neo4j/import/
-
+// sudo unzip wetransfer-186086.zip -d /media/lnr-ai/christo/github_repos/logistics/data/
 // cd /home/lnr-ai/.config/Neo4j\ Desktop/Application/neo4jDatabases/database-c8878123-c937-4a52-9271-227eec393f53/installation-4.0.3/
 // <!-- check consistency: -->
 

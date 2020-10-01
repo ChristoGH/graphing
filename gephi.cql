@@ -78,6 +78,60 @@ with collect(path) as paths
 call apoc.gephi.add(null,'neo4j_test', paths) yield nodes, relationships, time
 RETURN nodes, relationships, time;
 
+MATCH path=(c:Client)-[t:TRANSACTED_AT]->(m:Merchant)
+WHERE EXISTS(c.client_link_community_7916) AND m.subclass_id=56101
+WITH path 
+with collect(path) as paths
+call apoc.gephi.add(null,'neo4j_sa', paths) yield nodes, relationships, time
+RETURN nodes, relationships, time;
+
+
+// Push 7916 to gephi neo4j_7916 (transactians)
+MATCH path=(c:Client)-[t:TRANSACTED_AT]->(m:Merchant)
+WHERE EXISTS(c.client_link_community_7916) AND 
+m.subclass_id=56101 AND
+m.triadic_56101_community=7916
+WITH path 
+with collect(path) as paths
+call apoc.gephi.add(null,'neo4j_7916', paths, 'count', ['companyname', 'franchisename', 'client_link_community_7916','triadic_56101_community']) yield nodes, relationships, time
+RETURN nodes, relationships, time;
+
+// CLIENT_LINK_7916 to gephi
+MATCH path = (c0:Client)-[tcl:CLIENT_LINK_7916]-(c1:Client)
+WHERE ID(c0)<ID(c1) AND tcl.count=1
+RETURN PATH
+
+MATCH path = (c0:Client)-[tcl:CLIENT_LINK_7916]-(c1:Client)
+WHERE ID(c0)<ID(c1) 
+WITH path 
+with collect(path) as paths
+call apoc.gephi.add(null,'neo4j_client_link_7916', paths, 'count', ['client_link_community_7916']) yield nodes, relationships, time
+RETURN nodes, relationships, time;
+
+// Only use CLIENT_LINK_7916 where count>1
+MATCH path = (c0:Client)-[tcl:CLIENT_LINK_7916]-(c1:Client)
+WHERE ID(c0)<ID(c1) AND tcl.count>1
+WITH path 
+with collect(path) as paths
+call apoc.gephi.add(null,'neo4j_client_link_groblersdal', paths, 'count', ['companyname', 'franchisename', 'client_link_community_7916','triadic_56101_community']) yield nodes, relationships, time
+RETURN nodes, relationships, time;
+
+// Only use CLIENT_LINK_7916 where count>1
+MATCH path = (c0:GreenBacks)-[tcl:CLIENT_LINK_7916]-(c1:GreenBacks)
+WHERE ID(c0)<ID(c1) AND tcl.count>1
+WITH path 
+with collect(path) as paths
+call apoc.gephi.add(null,'neo4j_client_link_groblersdal_greenbacks', paths, 'count', ['MONEY_MANAGER_OPTED','companyname', 'franchisename', 'client_link_community_7916','triadic_56101_community']) yield nodes, relationships, time
+RETURN nodes, relationships, time;
+
+
+
+MATCH (c:Client)-[t:TRANSACTED_AT]->(m:Merchant)
+WHERE EXISTS(c.client_link_community_7916) AND m.subclass_id=56101
+RETURN c,t,m
+
+
+
 // the following snippet apocs the nodes and relationships to gephi 
 MATCH path=(m0:Merchant)-[t:TRIADIC_MERCHANT_FEET_LINK]->(m1:Merchant)
 WHERE ID(m0)<ID(m1) AND 
@@ -130,7 +184,7 @@ m1.triadic_56101_community IN [7916,
 1772,
 5989]
 with collect(path) as paths
-call apoc.gephi.add(null,'fastfoods', paths, 'count', ['companyname', 'franchisename', 'triadic_56101_community']) yield nodes, relationships, time
+call apoc.gephi.add(null,'neo4j_test', paths, 'count', ['companyname', 'franchisename', 'triadic_56101_community']) yield nodes, relationships, time
 RETURN nodes, relationships, time;
 
 // Test the above snippet:
@@ -646,3 +700,12 @@ WHERE EXISTS(c.client_link_community_2697)
 RETURN COUNT(c.client_link_community_2697) as count, c.client_link_community_2697 as 
 client_link_community
 ORDER BY count ASC
+
+
+// Preseentation
+1 Client ID = 2248959
+2 3472932
+
+MATCH path = (m0:Merchant)<-[:TRANSACTED_AT]-(:Client)-[:TRANSACTED_AT]->(m1:Merchant) 
+WHERE  ID(m0)<ID(m1) AND m1.triadic_56101_community=7916 AND m0.triadic_56101_community=7916 RETURN path;
+
