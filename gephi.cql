@@ -1,5 +1,5 @@
-// Our gephi file is here:
-// /media/lnr-ai/downloads/gephi-0.9.2/bin/
+// Our gephi bin is here:
+// /media/lnr-ai/downloads/gephi-0.9.2/bin/.gephi
 // triadic_56101_community
 // | Membership Count    | Community ID            |
 // |---------------------|-------------------------|

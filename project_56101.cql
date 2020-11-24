@@ -1,6 +1,6 @@
 
 // = The 56101 project =================================================================================================
-// In  this project we only look at merchants belonging to the subclass_id = 56101 (fast foods).
+// In  this project we only look at merchants belonging to the subclass_id = 56101 (fast foods their merchants and their clients).
 // The goal is to investigate the quality of community detection using the Louvain algorithm in the Neo4j db
 // Can we cluster these into discernible hubs, how many would here be  and does it separate clients on the same basis?
 // we need to remove merchant nodes with only one transaction pointing to it...  Careful.  This may include all the franchsies 
@@ -13,7 +13,7 @@
 
 // Find one transaction nodes:
 
-// Count the number of merchant nodes with only one relationship:
+// Count the number of merchant nodes with only one or two relationships:
 MATCH (client:Client)-[:TRANSACTED_AT]->(oldm:Merchant {subclass_id:56101}) 
 WITH oldm,count(client) as rels, collect(client) as clients
 WHERE rels <=2
@@ -52,7 +52,7 @@ MATCH (n:Merchant {subclass_id:56101}) WHERE n.franchisename =~ '(?i).*FUNDS.*' 
 MATCH (n:Merchant {subclass_id:56101}) WHERE n.franchisename =~ '(?i).*FUNDS.*' DETACH DELETE n;
 
 // Delete previous MERCHANT_FEET_LINKS:
-MATCH (merchant0:Merchant)-[mfl:MERCHANT_FEET_LINK]-(merchant1:Merchant)
+MATCH (merchant0:Merchant {subclass_id:56101})-[mfl:MERCHANT_FEET_LINK]-(merchant1:Merchant {subclass_id:56101})
 WHERE merchant0.subclass_id IN [56101] AND 
 merchant1.subclass_id IN [56101] 
 RETURN mfl;
@@ -96,8 +96,51 @@ link.count1 = link.count1+t1.count,
 link.transactioncount0 = link.transactioncount0+t0.transactioncount,
 link.transactioncount1 = link.transactioncount1+t1.transactioncount,
 link.transactionamount0 = link.transactionamount0+t0.transactionamount,
-link.transactionamount1 = link.transactionamount1+t1.transactionamount", {batchSize:100})
+link.transactionamount1 = link.transactionamount1+t1.transactionamount", {batchSize:10000, iterateList:true, retries:5})
 yield batches, total return batches, total;
+
+
+// Here we CORRECT the MERCHANT_LINK_FEET direction based on the transaction count of the two linked merchants
+MATCH (m0:Merchant {subclass_id:56101})-[rel:MERCHANT_FEET_LINK]-(m1:Merchant {subclass_id:56101})
+WHERE ID(m0)=rel.ID0 AND ID(m1)=rel.ID1
+WITH rel.transactioncount0<rel.transactioncount1 AS mustpointright, 
+rel.transactioncount0>rel.transactioncount1 AS mustpointleft,
+NOT (startNode(rel) = m0) as pointsleft,
+rel as relationship,(startNode(rel) = m0) as pointsright,m0,m1,rel,
+rel.transactioncount0 as transactioncount0,
+rel.transactioncount1 as transactioncount1, rel.ID0 as ID0, rel.ID1 as ID1, rel.count as count, 
+ID(rel) as rel_id
+FOREACH (p IN CASE WHEN (mustpointright AND pointsleft) THEN [1] ELSE [] END |
+    DELETE relationship
+    MERGE (m0)-[newrel:MERCHANT_FEET_LINK]->(m1)
+        ON CREATE SET newrel.transactioncount0 = transactioncount0,
+        newrel.transactioncount1=transactioncount1,
+        newrel.ID0=ID0,
+        newrel.ID1=ID1,
+        newrel.count=count
+)
+FOREACH (p IN CASE WHEN (mustpointleft AND pointsright) THEN [1] ELSE [] END |
+    DELETE relationship
+    MERGE (m0)<-[newrel:MERCHANT_FEET_LINK]-(m1)
+        ON CREATE SET newrel.transactioncount0 = transactioncount0,
+        newrel.transactioncount1=transactioncount1,
+        newrel.ID0=ID0,
+        newrel.ID1=ID1, 
+        newrel.count=count
+);
+
+// Check that all directions match:
+MATCH (m0:Merchant {subclass_id:56101})-[rel:MERCHANT_FEET_LINK]-(m1:Merchant {subclass_id:56101})
+WHERE ID(m0)=rel.ID0 AND ID(m1)=rel.ID1
+WITH m0,m1,rel, rel.transactioncount0<=rel.transactioncount1 AS mustpointright, 
+rel.transactioncount0>rel.transactioncount1 AS mustpointleft,
+NOT (startNode(rel) = m0) as pointsleft,
+(startNode(rel) = m0) as pointsright
+RETURN ID(m0) as IDm0, ID(m1) as IDm1, m0.franchisename as franchisename1,
+m1.franchisename as franchisename2, rel.transactioncount0 as transactioncount0,
+rel.transactioncount1 as transactioncount1,
+mustpointright, pointsright, mustpointleft, pointsleft;
+
 
 
 MATCH (merchant0:Merchant)<-[t0:TRANSACTED_AT]-(client:Client)-[t1:TRANSACTED_AT]->(merchant1:Merchant)
@@ -267,6 +310,142 @@ RETURN ID(m0) as IDm0, ID(m1) as IDm1, m0.franchisename as franchisename1,
 m1.franchisename as franchisename2, rel.transactioncount0 as transactioncount0,
 rel.transactioncount1 as transactioncount1,
 mustpointright, pointsright, mustpointleft, pointsleft;
+
+// =The file /media/lnr-ai/christo/github_repos/graphing/merchant_56101_graph.ipynb uses the following code================================================================================================================================
+MATCH (merchant:Merchant {subclass_id:56101})
+WHERE EXISTS(merchant.merchant_56101_community)
+REMOVE merchant.merchant_56101_community
+RETURN merchant.franchisename as franchisename, merchant.merchant_56101_community as merchant_56101_community;
+
+
+// Drop the merchant_56101_graph subgraph:
+CALL gds.graph.drop('merchant_56101_graph') YIELD graphName;
+
+// create the merchant_56101_graph subgraph:
+CALL gds.graph.create.cypher(
+    'merchant_56101_graph',
+    'MATCH (m0:Merchant {subclass_id:56101}) RETURN id(m0) AS id, m0.totaltransactionamount as totaltransactionamount, m0.totaltransactioncount as totaltransactioncount',
+    'MATCH (m0:Merchant {subclass_id:56101})-[rel:MERCHANT_FEET_LINK]->(m1:Merchant {subclass_id:56101}) WHERE rel.count > 5 RETURN id(m0) AS source, id(m1) AS target, rel.count as count'
+)
+YIELD graphName, nodeCount, relationshipCount, createMillis;
+
+CALL gds.louvain.stream('merchant_56101_graph', { relationshipWeightProperty: 'count', 
+maxLevels:10, 
+maxIterations:200, includeIntermediateCommunities:true})
+YIELD nodeId, communityId, intermediateCommunityIds
+RETURN gds.util.asNode(nodeId).franchisename AS franchisename, communityId, intermediateCommunityIds
+ORDER BY communityId DESC;
+
+CALL gds.louvain.stream('merchant_56101_graph', { relationshipWeightProperty: 'count', 
+maxLevels:10, 
+maxIterations:200, includeIntermediateCommunities:true})
+YIELD nodeId, communityId, intermediateCommunityIds
+RETURN communityId, COUNT(gds.util.asNode(nodeId).franchisename) as count
+ORDER BY count DESC;
+
+// Remove merchant_56101_community from all merchant nodes:
+MATCH (merchant:Merchant {subclass_id:56101})
+WHERE EXISTS(merchant.merchant_56101_community)
+REMOVE merchant.merchant_56101_community
+RETURN merchant.franchisename as franchisename, merchant.merchant_56101_community as merchant_45500_community;
+
+// Use the louvain algorithm to cluster merchant with subclass_id:56101
+CALL gds.louvain.write('merchant_56101_graph', { relationshipWeightProperty: 'count', 
+maxLevels:10, 
+maxIterations:200, writeProperty: 'merchant_56101_community' })
+YIELD communityCount, modularity, modularities;
+
+// Order the merchant_56101_communities by member count and add spend and transaction count BY community number:
+MATCH (merchant:Merchant {subclass_id:56101})
+WHERE EXISTS(merchant.merchant_56101_community)
+RETURN merchant.merchant_56101_community as merchant_56101_community,
+COUNT(merchant.totaltransactionamount) as community_member_count, 
+SUM(merchant.totaltransactionamount) as community_spend,
+SUM(merchant.totaltransactioncount) as community_transactioncount
+ORDER BY community_member_count ASC;
+
+| 2937                     | 12                     | -483185.39999999956 | 3447                       |
+| 1675                     | 19                     | -1078695.1699999967 | 7542                       |
+| 2245                     | 20                     | -823408.8899999998  | 5448                       |
+| 1521                     | 20                     | -2236328.9699999965 | 15704                      |
+| 1282                     | 27                     | -1674101.649999997  | 10946                      |
+| 1668                     | 56                     | -3788809.17999999   | 26190                      |
+| 1833                     | 62                     | -5232589.510000003  | 34561                      |
+| 728                      | 77                     | -5965571.129999981  | 36214                      |
+| 3516                     | 77                     | -4691426.289999984  | 34689                      |
+| 1502                     | 79                     | -5439140.099999976  | 42292                      |
+| 1476                     | 80                     | -4971163.479999981  | 35366                      |
+| 1322                     | 91                     | -5408204.309999996  | 44117                      |
+| 2288                     | 99                     | -5663659.229999985  | 41995                      |
+| 323                      | 113                    | -8931123.299999988  | 64960                      |
+| 2086                     | 116                    | -6184010.479999983  | 44249                      |
+| 1904                     | 122                    | -7629772.419999993  | 52697                      |
+| 2904                     | 132                    | -6571174.120000007  | 47364                      |
+| 2186                     | 166                    | -1.1591280009999953 | 83188                      |
+|                          |                        \ E7                  |                            |
+| 1111                     | 179                    | -1.3358918459999964 | 99419                      |
+|                          |                        \ E7                  |                            |
+| 957                      | 181                    | -1.0197444239999993 | 71871                      |
+|                          |                        \ E7                  |                            |
+| 1867                     | 198                    | -1.2482492079999955 | 90352                      |
+|                          |                        \ E7                  |                            |
+| 2940                     | 270                    | -1.6071704849999985 | 105169                     |
+|                          |                        \ E7                  |                            |
+| 1458                     | 279                    | -1.9576502139999963 | 134775                     |
+|                          |                        \ E7                  |                            |
+| 3033                     | 285                    | -1.717380392000001E | 131826                     |
+|                          |                        \ 7                   |                            |
+| 1565                     | 312                    | -1.8183545859999966 | 137881                     |
+|                          |                        \ E7                  |                            |
+| 3312                     | 439                    | -2.103301092999995E | 160927                     |
+|                          |                        \ 7                   |                            |
+| 2134                     | 592                    | -4.081258299999993E | 303063                     |
+|                          |                        \ 7                   |                            |
+| 2066                     | 847                    | -6.359869151999974E | 470742                     |
+|                          |                        \ 7                   |                            |
+
+// look at one fast food community from above 
+MATCH (merchant:Merchant {subclass_id:56101, merchant_56101_community:1904})
+// WHERE EXISTS(merchant.merchant_56101_community)
+RETURN merchant.companyname as companyname,
+merchant.franchisename as franchisename,
+merchant.merchant_56101_community as merchant_56101_community,
+merchant.totaltransactionamount as totaltransactionamount, 
+// merchant.totaltransactionamount) as community_spend,
+merchant.totaltransactioncount as totaltransactioncount
+ORDER BY totaltransactionamount ASC;
+
+MATCH (m:Merchant {subclass_id:56101})
+WHERE m.franchisename =~ '(?i).*grobler.*'
+RETURN m.merchant_56101_community as merchant_56101_community, m.franchisename as franchisename, ID(m) as merchantID
+ORDER BY franchisename ASC;
+
+CALL gds.graph.drop('merchant_56101_1904_graph') YIELD graphName;
+
+// create the merchant_56101_graph subgraph:
+CALL gds.graph.create.cypher(
+    'merchant_56101_1904_graph',
+    'MATCH (m0:Merchant {merchant_56101_community:1904}) RETURN id(m0) AS id, m0.totaltransactionamount as totaltransactionamount, m0.totaltransactioncount as totaltransactioncount',
+    'MATCH (m0:Merchant {merchant_56101_community:1904})-[rel:MERCHANT_FEET_LINK]->(m1:Merchant {merchant_56101_community:1904}) 
+    WHERE rel.count > 5 RETURN id(m0) AS source, id(m1) AS target, rel.count as count'
+)
+YIELD graphName, nodeCount, relationshipCount, createMillis;
+
+
+CALL gds.pageRank.write('merchant_56101__1904_graph', {
+  maxIterations: 20,
+  dampingFactor: 0.85,
+  writeProperty: 'merchant_56101_rank',
+  relationshipWeightProperty: 'count'
+})
+YIELD nodePropertiesWritten AS writtenProperties, ranIterations;
+
+MATCH (m:Merchant {subclass_id:56101})
+WHERE EXISTS(m.merchant_56101_rank) AND m.merchant_56101_community = 1904
+RETURN m.franchisename as franchisename, m.merchant_56101_rank as merchant_56101_rank
+ORDER BY merchant_56101_rank ASC;
+
+
 
 
 // Create triadic-graph on subclass_id:56101====================================================================================
@@ -475,9 +654,9 @@ ORDER BY membercount ASC;
 // triadic_56101_community=7916
 MATCH (client0:Client)-[t0:TRANSACTED_AT]->(merchant:Merchant)<-[t1:TRANSACTED_AT]-(client1:Client)
 WHERE ID(client0) < ID(client1) AND 
-merchant.triadic_56101_community = 7916
-SET client0.triadic_56101_community=7916, client1.triadic_56101_community=7916
-MERGE (client0)-[link:CLIENT_LINK_7916]-(client1)
+merchant.merchant_56101_community = 1904
+SET client0.merchant_56101_community=1904, client1.merchant_56101_community=1904
+MERGE (client0)-[link:CLIENT_LINK_1904]-(client1)
 ON CREATE SET link.count = 1,
 link.ID0=ID(client0),
 link.ID1=ID(client1),
@@ -492,10 +671,224 @@ link.transactionamount0 = link.transactionamount0+t0.transactionamount,
 link.transactionamount1 = link.transactionamount1+t1.transactionamount
 RETURN count(link);
 
+
+CALL apoc.periodic.iterate('MATCH (client0:Client)-[link:CLIENT_LINK_1904]-(client1:Client)
+RETURN link;',
+"DELETE link", {batchSize:500, iterateList:true, retries:5})
+yield batches, total return batches, total;
+
+CALL apoc.periodic.iterate('MATCH (client0:Client)-[t0:TRANSACTED_AT]->(merchant:Merchant)<-[t1:TRANSACTED_AT]-(client1:Client)
+WHERE ID(client0) < ID(client1) AND 
+merchant.merchant_56101_community = 1904 AND
+t0.transactioncount>2 AND t1.transactioncount>2
+RETURN client0, client1, t0, t1;',
+"SET client0.merchant_56101_community=1904, client1.merchant_56101_community=1904
+MERGE (client0)-[link:CLIENT_LINK_1904]-(client1)
+ON CREATE SET link.count = 1,
+link.ID0=ID(client0),
+link.ID1=ID(client1),
+link.transactioncount0 = t0.transactioncount,
+link.transactioncount1 = t1.transactioncount,
+link.transactionamount0 = t0.transactionamount,
+link.transactionamount1 = t1.transactionamount
+ON MATCH SET link.count = link.count + 1,
+link.transactioncount0 = link.transactioncount0+t0.transactioncount,
+link.transactioncount1 = link.transactioncount1+t1.transactioncount,
+link.transactionamount0 = link.transactionamount0+t0.transactionamount,
+link.transactionamount1 = link.transactionamount1+t1.transactionamount
+RETURN count(link)", {batchSize:500, iterateList:true, retries:5})
+yield batches, total return batches, total;
+
+
+// Here we CORRECT the CLIENT_LINK_1904 direction, which way did feet move
+MATCH (c0:Client)-[rel:CLIENT_LINK_1904]-(c1:Client)
+WHERE ID(c0)=rel.ID0 AND ID(c1)=rel.ID1
+WITH rel.transactioncount0<rel.transactioncount1 AS mustpointright, 
+rel.transactioncount0>rel.transactioncount1 AS mustpointleft,
+NOT (startNode(rel) = c0) as pointsleft,
+rel as relationship,(startNode(rel) = c0) as pointsright,c0,c1,rel,
+rel.transactioncount0 as transactioncount0,
+rel.transactioncount1 as transactioncount1, rel.ID0 as ID0, rel.ID1 as ID1, rel.count as count, 
+ID(rel) as rel_id
+FOREACH (p IN CASE WHEN (mustpointright AND pointsleft) THEN [1] ELSE [] END |
+    DELETE relationship
+    MERGE (c0)-[newrel:CLIENT_LINK_1904]->(c1)
+        ON CREATE SET newrel.transactioncount0 = transactioncount0,
+        newrel.transactioncount1=transactioncount1,
+        newrel.ID0=ID0,
+        newrel.ID1=ID1,
+        newrel.count=count
+)
+FOREACH (p IN CASE WHEN (mustpointleft AND pointsright) THEN [1] ELSE [] END |
+    DELETE relationship
+    MERGE (c0)<-[newrel:CLIENT_LINK_1904]-(c1)
+        ON CREATE SET newrel.transactioncount0 = transactioncount0,
+        newrel.transactioncount1=transactioncount1,
+        newrel.ID0=ID0,
+        newrel.ID1=ID1, 
+        newrel.count=count
+);
+
+
+// Check that all directions match:
+MATCH (c0:Client)-[rel:CLIENT_LINK_1904]-(c1:Client)
+WHERE ID(c0)=rel.ID0 AND ID(c1)=rel.ID1
+WITH c0,c1,rel, rel.transactioncount0<=rel.transactioncount1 AS mustpointright, 
+rel.transactioncount0>rel.transactioncount1 AS mustpointleft,
+NOT (startNode(rel) = c0) as pointsleft,
+(startNode(rel) = c0) as pointsright
+RETURN ID(c0) as IDm0, ID(c1) as IDm1, c0.franchisename as franchisename1,
+c1.franchisename as franchisename2, rel.transactioncount0 as transactioncount0,
+rel.transactioncount1 as transactioncount1,
+mustpointright, pointsright, mustpointleft, pointsleft;
+
+
+CALL gds.graph.drop('client_link_graph_1904') YIELD graphName;
+
+CALL gds.graph.create.cypher(
+    'client_link_graph_1904',
+    'MATCH (c0:Client) WHERE c0.merchant_56101_community = 1904 RETURN id(c0) AS id',
+    'MATCH (c0:Client)-[rel:CLIENT_LINK_1904]->(c1:Client)  RETURN id(c0) AS source, id(c1) AS target, rel.count as count'
+)
+YIELD graphName, nodeCount, relationshipCount, createMillis;
+
+CALL gds.louvain.stream('client_link_graph_1904', { relationshipWeightProperty: 'count', 
+maxLevels:10, 
+maxIterations:200, includeIntermediateCommunities:true})
+YIELD nodeId, communityId, intermediateCommunityIds
+RETURN gds.util.asNode(nodeId).dedupestatic AS dedupestatic, communityId, intermediateCommunityIds
+ORDER BY communityId DESC;
+
+MATCH (client:Client)
+WHERE EXISTS(client.client_link_community_1904)
+REMOVE client.client_link_community_1904
+RETURN client.dedupestatic as dedupestatic, client.client_link_community_1904 as client_link_community_1904;
+
+CALL gds.louvain.write('client_link_graph_1904', { relationshipWeightProperty: 'count', 
+maxLevels:10, 
+maxIterations:200, writeProperty: 'client_link_community_1904' })
+YIELD communityCount, modularity, modularities
+
+MATCH (c:Client)
+WHERE EXISTS(c.client_link_community_1904)
+RETURN c.client_link_community_1904, COUNT(c.client_link_community_1904) as membercount
+ORDER BY membercount ASC;
+
+// | 3751                         | 3                   |
+// | 6898                         | 4                   |
+// | 6669                         | 4                   |
+// | 8249                         | 5                   |
+// | 1435                         | 5                   |
+// | 2956                         | 8                   |
+// | 10041                        | 11                  |
+// | 7062                         | 19                  |
+// | 2329                         | 20                  |
+// | 659                          | 25                  |
+// | 10112                        | 25                  |
+// | 10831                        | 27                  |
+// | 3552                         | 41                  |
+// | 10128                        | 42                  |
+// | 7003                         | 57                  |
+// | 8588                         | 74                  |
+// | 10705                        | 75                  |
+// | 9919                         | 98                  |
+// | 7819                         | 106                 |
+// | 8026                         | 129                 |
+// | 9970                         | 131                 |
+// | 10883                        | 172                 |
+// | 363                          | 192                 |
+// | 4313                         | 243                 |
+// | 6814                         | 510                 |
+// | 4456                         | 595                 |
+// +----------------------------------------------------+
+
+
+CALL gds.graph.create.cypher(
+    'client_graph_1904_9919',
+    'MATCH (c0:Client) WHERE c0.client_link_community_1904=9919 RETURN id(c0) AS id',
+    'MATCH (c0:Client)-[cl:CLIENT_LINK_1904]->(c1:Client) WHERE c0.client_link_community_1904=9919 
+    AND c1.client_link_community_1904=9919 RETURN id(c0) AS source, id(c1) AS target, cl.count as count'
+)
+YIELD graphName, nodeCount, relationshipCount, createMillis;
+
+CALL gds.pageRank.stream('client_graph_1904_9919', { maxIterations: 20, dampingFactor: 0.85 })
+    YIELD nodeId, score
+    RETURN gds.util.asNode(nodeId).dedupestatic AS dedupestatic, score
+    ORDER BY score DESC, dedupestatic ASC;
+
+
+CALL gds.pageRank.write('client_graph_1904_9919', {
+  maxIterations: 20,
+  dampingFactor: 0.85,
+  writeProperty: 'client_graph_1904_9919_rank',
+  relationshipWeightProperty: 'count'
+})
+YIELD nodePropertiesWritten AS writtenProperties, ranIterations;
+
+
+MATCH (c:Client {client_link_community_1904:9919})
+RETURN c.dedupestatic as dedupestatic, c.client_graph_1904_9919_rank as client_graph_1904_9919_rank
+ORDER BY client_graph_1904_9919_rank ASC;
+
+
+// The following shows spend and volume of client_link_community_1904_9919 clients at merchant_56101_community:_1904 
+MATCH (c:Client {client_link_community_1904:9919})-[t:TRANSACTED_AT]-(m:Merchant {merchant_56101_community:1904})
+RETURN c.dedupestatic as dedupestatic, c.client_graph_1904_9919_rank as client_graph_1904_9919_rank,
+t.transactionamount as transactionamount, t.transactioncount as transactioncount,m.franchisename as franchisename
+ORDER BY client_graph_1904_9919_rank ASC;
+
+// The following shows the spend of client_link_community_1904_9919 clients at all merchants:
+MATCH (c:Client {client_link_community_1904:9919})-[t:TRANSACTED_AT]-(m:Merchant)
+RETURN c.dedupestatic as dedupestatic, c.client_graph_1904_9919_rank as client_graph_1904_9919_rank,
+t.transactionamount as transactionamount, t.transactioncount as transactioncount,m.franchisename as franchisename,
+m.companyname as companyname
+ORDER BY client_graph_1904_9919_rank ASC;
+
+// The following aggregates by each fast food outlet in the merchant_56101_community:1904 community the spend at any 
+// OTHER merchant in the vicinity
+MATCH (m1904:Merchant {merchant_56101_community:1904})<-[t1904:TRANSACTED_AT]-(c:Client {client_link_community_1904:9919})-[tm:TRANSACTED_AT]->(merchant:Merchant)
+WHERE NOT merchant.subclass_id=56101
+RETURN m1904.franchisename as m1904_franchisename, SUM(t1904.transactionamount) as merchant_t1904_transactionamount,
+SUM(tm.transactionamount) as merchant_transactionamount,
+merchant.franchisename as merchant_franchisename
+ORDER BY merchant_t1904_transactionamount DESC;
+
+// The following aggregates by each fast food outlet in the merchant_56101_community:1904 community the client spend from client 
+// community at any 9919 OTHER merchant in the vicinity
+MATCH (m1904:Merchant {merchant_56101_community:1904})<-[t1904:TRANSACTED_AT]-(c:Client {client_link_community_1904:9919})-[tm:TRANSACTED_AT]->(merchant:Merchant)
+WHERE NOT merchant.subclass_id=56101
+RETURN m1904.companyname as m1904_companyname, SUM(t1904.transactionamount) as merchant_t1904_transactionamount,
+SUM(tm.transactionamount) as merchant_transactionamount,
+merchant.companyname as merchant_companyname
+ORDER BY merchant_t1904_transactionamount ASC;
+
+// The following aggregates by each fast food outlet in the merchant_56101_community:1904 community the client spend from client 
+// community at any 7819 OTHER merchant in the vicinity
+MATCH (m1904:Merchant {merchant_56101_community:1904})<-[t1904:TRANSACTED_AT]-(c:Client {client_link_community_1904:7819})-[tm:TRANSACTED_AT]->(merchant:Merchant)
+WHERE NOT merchant.subclass_id=56101
+RETURN m1904.companyname as m1904_companyname, SUM(t1904.transactionamount) as merchant_t1904_transactionamount,
+SUM(tm.transactionamount) as merchant_transactionamount,
+merchant.companyname as merchant_companyname
+ORDER BY merchant_t1904_transactionamount ASC;
+
+
+
+
+MATCH (m:Merchant {subclass_id:56101})
+WHERE EXISTS(m.merchant_56101_rank) AND m.merchant_56101_community = 1904
+RETURN m.franchisename as franchisename, m.merchant_56101_rank as merchant_56101_rank
+ORDER BY merchant_56101_rank ASC;
+
+// ============================================================================================================================
+
 MATCH (client0:Client)-[t0:TRANSACTED_AT]->(merchant:Merchant)<-[t1:TRANSACTED_AT]-(client1:Client)
 WHERE ID(client0) < ID(client1) AND 
 merchant.triadic_56101_community = 7916
 SET client0.triadic_56101_community=7916, client1.triadic_56101_community=7916
+
+MATCH (client0:Client)-[cfl:CLIENT_LINK_7916]-(client1:Client)
+WHERE client0.subclass_id IN [56101] AND merchant1.subclass_id IN [56101] 
+RETURN cfl;
 
 CALL apoc.periodic.iterate('MATCH (client0:Client)-[t0:TRANSACTED_AT]->(merchant:Merchant)<-[t1:TRANSACTED_AT]-(client1:Client)
 WHERE ID(client0) < ID(client1) AND 
@@ -589,6 +982,16 @@ CALL gds.pageRank.stream('triadic_graph_7916_822', { maxIterations: 20, dampingF
     ORDER BY score DESC, dedupestatic ASC;
 
 
+CALL gds.pageRank.write('DischemGraph', {
+  maxIterations: 20,
+  dampingFactor: 0.85,
+  writeProperty: 'pagerank',
+  relationshipWeightProperty: 'count'
+})
+YIELD nodePropertiesWritten AS writtenProperties, ranIterations;
+
+
+
 MATCH (c:Client)-[t:TRANSACTED_AT]->(m:Merchant)
 WHERE EXISTS(c.client_link_community_7916) AND c.client_link_community_7916=232 AND m.subclass_id=56101
 RETURN c,t,m
@@ -618,5 +1021,11 @@ MATCH (m0:Merchant {subclass_id:56101})-[t:TRIADIC_MERCHANT_FEET_LINK]-(m1:Merch
 WHERE ID(m0)<ID(m1) AND m0.triadic_56101_community=9137 AND m1.triadic_56101_community=9137 
 RETURN m0,t,m1
 
+MATCH (c:Client)-[t:TRANSACTED_AT]->(m:Merchant)
+// WHERE EXISTS(c.client_link_community_7916) AND c.client_link_community_7916=232 AND m.subclass_id=56101
+RETURN c.dedupestatic AS dedupestatic,  
+t.transactionamount AS transactionamount, 
+m.companyname as companyname
+LIMIT 100;
 
 

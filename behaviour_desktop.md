@@ -10,9 +10,14 @@
 // clientswipes_202003_neo4j.csv"
 // sudo mv /media/lnr-ai/downloads/home/christo/data/clientswipes_202003_PBCVM.csv /var/lib/neo4j/import/
 // sudo unzip wetransfer-186086.zip -d /media/lnr-ai/christo/github_repos/logistics/data/
+// sudo unzip /media/lnr-ai/downloads/wetransfer-a7b903.zip -d /media/lnr-ai/christo/github_repos/logistics/data/
+// sudo unzip /media/lnr-ai/downloads/nedbankresignation.zip -d /media/lnr-ai/christo/nedbankresignation/
 // cd /home/lnr-ai/.config/Neo4j\ Desktop/Application/neo4jDatabases/database-c8878123-c937-4a52-9271-227eec393f53/installation-4.0.3/
 // <!-- check consistency: -->
-
+// sudo unzip /media/lnr-ai/christo/github_repos/graphing/data/clientswipes_202008_PBCVM.zip -d /var/lib/neo4j/import/
+// ---------------------------------------------------------------------------------------------------------------------------
+// sudo unzip /media/lnr-ai/christo/github_repos/money_personalities/data/clientdb_catchall_aggregated.zip -d /media/lnr-ai/christo/github_repos/money_personalities/data/
+// ---------------------------------------------------------------------------------------------------------------------------
 // sudo /usr/bin/neo4j-admin check-consistency --database=clientswipes_202003.db --report-dir=/media/lnr-ai/neo4j/ --verbose=true
 // sudo /usr/bin/neo4j console
 // sudo /usr/bin/cypher-shell -u neo4j -p newPassword
@@ -131,7 +136,7 @@ m.totaltransactionamount=m.totaltransactionamount+toFloat(row.TransactionAmount)
 RETURN count(m);
 
 CALL apoc.periodic.iterate("MATCH (m:Merchant) WHERE m.companyname='Unknown' RETURN m", "DELETE m", 
-{batchSize:100})
+{batchSize:500})
 yield batches, total return batches, total;
 
 CALL apoc.periodic.iterate("MATCH (m:Merchant)  RETURN m", 

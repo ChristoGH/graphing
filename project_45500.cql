@@ -12,37 +12,39 @@
 // ./cypher-shell -u neo4j -p newPassword
 
 // Find one transaction nodes:
-
-// Count the number of merchant nodes with only one relationship:
 MATCH (client:Client)-[:TRANSACTED_AT]->(oldm:Merchant {subclass_id:45500}) 
 WITH oldm,count(client) as rels, collect(client) as clients
 WHERE rels <=2
 RETURN oldm.franchisename as franchisename,rels
 ORDER BY rels;
 
+// Rank fuel merchants who had more than one client by unique clients:
 MATCH (client:Client)-[:TRANSACTED_AT]->(oldm:Merchant {subclass_id:45500}) 
 WITH oldm,count(client) as rels, collect(client) as clients
 WHERE rels >2
 RETURN oldm.franchisename as franchisename,rels
 ORDER BY rels ASC;
 
+// Rank fuel merchants by unique clients:
 MATCH (client:Client)-[:TRANSACTED_AT]->(oldm:Merchant {subclass_id:45500}) 
 WITH oldm,count(client) as rels, collect(client) as clients
 // WHERE rels <=2
 RETURN oldm.franchisename as franchisename,rels
 ORDER BY franchisename ASC;
 
+// 
 MATCH (client:Client)-[t:TRANSACTED_AT]->(merchant:Merchant {subclass_id:45500}) 
 // WITH merchant,count(client) as client, collect(client) as clients
 WHERE t.transactioncount>1
 RETURN client.dedupestatic as dedupestatic, t.transactioncount as count, merchant.franchisename as franchisename
 ORDER BY count ASC;
 
-// Detach delete merchants with only one transaction...
+// Count merchants (POS) with only one transaction...
 MATCH (merchant0:Merchant {subclass_id:45500})
 WHERE merchant0.totaltransactioncount=1
 RETURN (COUNT(merchant0));
 
+// Detach delete merchants with only one transaction...
 MATCH (merchant0:Merchant {subclass_id:45500})
 WHERE merchant0.totaltransactioncount=1
 DETACH DELETE merchant0;
@@ -52,13 +54,13 @@ RETURN mfl;
 ", "DELETE mfl", {batchSize:10000, iterateList:true})
 yield batches, total return batches, total;
 
-// 1. Here we CREATE  the MERCHANT_LINK_FEET direction.
+// 1. Here we CREATE  the MERCHANT_FEET_LINK_45500 direction.
 CALL apoc.periodic.iterate('MATCH (merchant0:Merchant)<-[t0:TRANSACTED_AT]-(client:Client)-[t1:TRANSACTED_AT]->(merchant1:Merchant)
 WHERE ID(merchant0) < ID(merchant1) AND 
 merchant0.subclass_id IN [45500] AND 
 merchant1.subclass_id IN [45500] AND
-t0.transactioncount>2 AND
-t1.transactioncount>2 
+t0.transactioncount>1 AND
+t1.transactioncount>1 
 RETURN merchant0, merchant1, t0, t1;
 ', "MERGE (merchant0)-[link:MERCHANT_FEET_LINK_45500]-(merchant1)
 ON CREATE SET link.count = 1,
@@ -81,7 +83,8 @@ yield batches, total return batches, total;
 
 MATCH (merchant0:Merchant)-[tmfl:MERCHANT_FEET_LINK_45500]-(merchant1:Merchant)
 WHERE merchant0.subclass_id IN [45500] AND 
-merchant1.subclass_id IN [45500] 
+merchant1.subclass_id IN [45500] AND 
+ID(merchant0)<ID(merchant1)
 //AND tmfl.count=1
 RETURN merchant0.franchisename, merchant1.franchisename, tmfl.count AS count
 ORDER BY count ASC;
@@ -127,13 +130,15 @@ m1.franchisename as franchisename2, rel.transactioncount0 as transactioncount0,
 rel.transactioncount1 as transactioncount1,
 mustpointright, pointsright, mustpointleft, pointsleft;
 
-// =================================================================================================================================
+// =The file /media/lnr-ai/christo/github_repos/graphing/merchant_45500_graph.ipynb uses the following code================================================================================================================================
+// Drop the merchant_45500_graph subgraph:
 CALL gds.graph.drop('merchant_45500_graph') YIELD graphName;
 
+// create the merchant_45500_graph subgraph:
 CALL gds.graph.create.cypher(
     'merchant_45500_graph',
     'MATCH (m0:Merchant {subclass_id:45500}) RETURN id(m0) AS id, m0.totaltransactionamount as totaltransactionamount, m0.totaltransactioncount as totaltransactioncount',
-    'MATCH (m0:Merchant)-[rel:MERCHANT_FEET_LINK_45500]->(m1:Merchant) RETURN id(m0) AS source, id(m1) AS target, rel.count as count'
+    'MATCH (m0:Merchant)-[rel:MERCHANT_FEET_LINK_45500]->(m1:Merchant) WHERE rel.count > 5 RETURN id(m0) AS source, id(m1) AS target, rel.count as count'
 )
 YIELD graphName, nodeCount, relationshipCount, createMillis;
 
@@ -151,15 +156,122 @@ YIELD nodeId, communityId, intermediateCommunityIds
 RETURN communityId, COUNT(gds.util.asNode(nodeId).franchisename) as count
 ORDER BY count DESC;
 
+// Remove merchant_45500_community from all merchant nodes:
 MATCH (merchant:Merchant {subclass_id:45500})
 WHERE EXISTS(merchant.merchant_45500_community)
 REMOVE merchant.merchant_45500_community
 RETURN merchant.franchisename as franchisename, merchant.merchant_45500_community as merchant_45500_community;
 
+// Use the louvain algorithm to cluster merchant with subclass_id:45500
 CALL gds.louvain.write('merchant_45500_graph', { relationshipWeightProperty: 'count', 
 maxLevels:10, 
 maxIterations:200, writeProperty: 'merchant_45500_community' })
 YIELD communityCount, modularity, modularities;
+
+// aggregation analysis by merchant and merchant_45500_community
+
+MATCH (merchant:Merchant {subclass_id:45500})
+WHERE EXISTS(merchant.merchantRank_45500)
+RETURN merchant.merchant_45500_community as merchant_45500_community,
+merchant.companyname as companyname, 
+merchant.franchisename as franchisename, 
+merchant.merchantRank_45500 as merchant_rank,
+merchant.totaltransactionamount as totaltransactionamount,
+merchant.totaltransactioncount as totaltransactioncount
+ORDER BY merchant_45500_community ASC;
+
+MATCH (merchant:Merchant {subclass_id:45500})
+WHERE EXISTS(merchant.merchantRank_45500)
+RETURN merchant.merchant_45500_community as merchant_45500_community,
+SUM(merchant.totaltransactionamount) as totaltransactionamount,
+SUM(merchant.totaltransactioncount) as totaltransactioncount
+ORDER BY merchant_45500_community ASC;
+
+
+MATCH (merchant:Merchant {subclass_id:45500})
+WHERE EXISTS(merchant.merchant_45500_community)
+RETURN merchant.merchant_45500_community as merchant_45500_community,
+COUNT(merchant.totaltransactionamount) as community_member_count, 
+SUM(merchant.totaltransactionamount) as community_spend,
+SUM(merchant.totaltransactioncount) as community_transactioncount;
+
+MATCH (client:Client)-[t:TRANSACTED_AT]-(merchant:Merchant)
+WHERE EXISTS(merchant.merchantRank_45500)
+RETURN merchant.merchant_45500_community as merchant_45500_community,
+COUNT(client) as nClients,
+SUM(client.totaltransactionamount) as totalspend,
+COUNT(DISTINCT merchant) as nMerchants
+ORDER BY nClients ASC;
+
+MATCH (merchant:Merchant {subclass_id:45500})
+WHERE EXISTS(merchant.merchantRank_45500)
+RETURN merchant.merchant_45500_community as merchant_45500_community,
+merchant.companyname as companyname, 
+merchant.franchisename as franchisename, 
+merchant.merchantRank_45500 as merchant_rank,
+merchant.totaltransactionamount as totaltransactionamount,
+merchant.totaltransactioncount as totaltransactioncount
+ORDER BY merchant_45500_community ASC;
+
+// =Gephi===============================================================================================
+
+MATCH (merchant:Merchant {subclass_id:45500})
+WHERE EXISTS(merchant.merchantRank_45500)
+RETURN merchant.merchant_45500_community as merchant_45500_community,
+COUNT(merchant.merchant_45500_community) as merchant_45500_community_count
+ORDER BY merchant_45500_community_count ASC;
+
+MATCH path = (merchant1:Merchant)-[mfl:MERCHANT_FEET_LINK_45500]->(merchant2:Merchant)
+WHERE EXISTS(merchant1.merchantRank_45500) AND EXISTS(merchant2.merchantRank_45500)
+WITH path 
+with collect(path) as paths
+call apoc.gephi.add(null,'new_db_test', paths, 'count', ['count',
+'companyname', 
+'franchisename', 
+'merchant_45500_community','merchantRank_45500','totaltransactionamount','totaltransactioncount']) yield nodes, relationships, time
+RETURN nodes, relationships, time;
+
+
+MATCH path = (merchant1:Merchant)-[mfl:MERCHANT_FEET_LINK_45500]->(merchant2:Merchant)
+WHERE EXISTS(merchant1.merchantRank_45500) AND EXISTS(merchant2.merchantRank_45500) AND mfl.count > 5 
+WITH path 
+with collect(path) as paths
+call apoc.gephi.add(null,'merchant_45500_graph', paths, 'count', ['count',
+'companyname', 
+'franchisename', 
+'merchant_45500_community','merchantRank_45500','totaltransactionamount','totaltransactioncount']) yield nodes, relationships, time
+RETURN nodes, relationships, time;
+
+// ======================================================================================================
+// Drop the merchant_45500_graph subgraph:
+CALL gds.graph.drop('merchant_45500_graph') YIELD graphName;
+
+// create the merchant_45500_graph subgraph:
+CALL gds.graph.create.cypher(
+    'merchant_45500_graph',
+    'MATCH (m0:Merchant {subclass_id:45500}) 
+    WHERE m0.merchant_45500_community = 5007 RETURN id(m0) AS id, m0.totaltransactionamount as totaltransactionamount, m0.totaltransactioncount as totaltransactioncount',
+    'MATCH (m0:Merchant)-[rel:MERCHANT_FEET_LINK_45500]->(m1:Merchant) 
+    WHERE rel.count > 1 AND 
+    m0.merchant_45500_community = 5007 AND 
+    m1.merchant_45500_community = 5007
+    RETURN id(m0) AS source, id(m1) AS target, rel.count as count'
+)
+YIELD graphName, nodeCount, relationshipCount, createMillis;
+
+CALL gds.pageRank.stream('merchant_45500_graph', { maxIterations: 20, dampingFactor: 0.85 })
+    YIELD nodeId, score
+    RETURN gds.util.asNode(nodeId).franchisename AS franchisename, gds.util.asNode(nodeId).companyname AS companyname, score
+    ORDER BY score DESC;
+
+CALL gds.pageRank.write('merchant_45500_graph', {
+  maxIterations: 20,
+  dampingFactor: 0.85,
+  writeProperty: 'merchantRank_12219',
+  relationshipWeightProperty: 'count'
+})
+YIELD nodePropertiesWritten AS writtenProperties, ranIterations;
+
 
 
 MATCH (m:Merchant {subclass_id:45500})
@@ -172,6 +284,24 @@ ORDER BY franchisename;
 
 
 MATCH (n:Merchant {subclass_id:45500})
+WHERE n.franchisename =~ '(?i).*INS FUNDS.*'
+RETURN n.franchisename, n.companyname;
+
+MATCH (n:Merchant {subclass_id:45500})
+WHERE n.franchisename =~ '(?i).*CNA.*'
+RETURN n.franchisename, n.companyname;
+
+
+MATCH (n:Merchant {subclass_id:45500})
+WHERE n.franchisename =~ '(?i).*CNA.*'
+DETACH DELETE n;
+
+MATCH (n:Merchant {subclass_id:45500})
+WHERE n.franchisename =~ '(?i).*ABSA.*'
+DETACH DELETE n;
+
+
+MATCH (n:Merchant {subclass_id:45500})
 WHERE n.franchisename =~ '(?i).*Checkers.*'
 RETURN n.franchisename, n.companyname;
 
@@ -181,6 +311,10 @@ DETACH DELETE n;
 
 MATCH (n:Merchant {subclass_id:45500})
 WHERE n.franchisename =~ '(?i).*checkers.*'
+DETACH DELETE n;
+
+MATCH (n:Merchant {subclass_id:45500})
+WHERE n.franchisename =~ '(?i).*INS FUNDS.*'
 DETACH DELETE n;
 
 // ==================================================================================================================
